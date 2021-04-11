@@ -1,4 +1,4 @@
-use std::{iter::FromIterator, slice::Iter, time::Duration};
+use std::{slice::Iter, time::Duration};
 
 use gilrs::{Gilrs, Button, Event, Axis};
 
@@ -7,21 +7,21 @@ pub fn go() {
 
     // Iterate over all connected gamepads
     let mut gamepad_id = None;
-    for (id, gamepad2) in gilrs.gamepads() {
+    for (id, gamepad) in gilrs.gamepads() {
         gamepad_id = Some(id);
-        println!("{} is {:?}", gamepad2.name(), gamepad2.power_info());
+        println!("{} is {:?}", gamepad.name(), gamepad.power_info());
     }
     
+    let loop_sleep_duration = Duration::from_millis(1);
     loop {
-        // Examine new events
         while let Some(Event { id: _, event: _, time: _ }) = gilrs.next_event() {
             //println!("{:?} New event from {}: {:?}", time, id, event);
             //active_gamepad = Some(id);
         }
     
-        // You can also use cached gamepad state
         let mut buttons_state = 0;
         let mut stick_state = 0;
+        let mut trigger_state = 0i16;
         if let Some(id) = gamepad_id {
             let gamepad = gilrs.gamepad(id);
 
@@ -36,10 +36,17 @@ pub fn go() {
                 .map(|axis| (axis.0, axis.1.unwrap()))
                 .map(|axis| map_axis_data(axis.1.value(), axis.0))
                 .fold(0, |accumulated, element| accumulated | element);
-        }
-        print!("Stick: {:#034b}. Buttons state: {:#08}.     \r", stick_state, buttons_state);
 
-        std::thread::sleep(Duration::from_millis(1));
+            trigger_state = triggers_iterator()
+                .map(|&trigger| (trigger, gamepad.axis_data(trigger)))
+                .filter(|trigger| trigger.1.is_some())
+                .map(|trigger| (trigger.0, trigger.1.unwrap()))
+                .map(|trigger| map_trigger_data(trigger.1.value(), trigger.0))
+                .fold(0, |accumulated, element| accumulated | element);
+        }
+        print!("Stick: {:#034b}. Triggers: {:#018b}. Buttons state: {:#08}.     \r", stick_state, trigger_state, buttons_state);
+
+        std::thread::sleep(loop_sleep_duration);
     }
 }
 
@@ -82,13 +89,18 @@ fn map_axis_data(value: f32, axis: Axis) -> i32 {
     match axis {
         Axis::LeftStickX => result << 24,
         Axis::LeftStickY => result << 16,
-        Axis::LeftZ => 0,
         Axis::RightStickX => result << 8,
         Axis::RightStickY => result << 0,
-        Axis::RightZ => 0,
-        Axis::DPadX => 0,
-        Axis::DPadY => 0,
-        Axis::Unknown => 0
+        _ => 0
+    }
+}
+
+fn map_trigger_data(value: f32, trigger: Axis) -> i16 {
+    let result = (((value * 128.0) + 128.0) as u8) as i16;
+    match trigger {
+        Axis::LeftZ => result << 8,
+        Axis::RightZ => result << 0,
+        _ => 0
     }
 }
 
@@ -112,4 +124,12 @@ fn axes_iterator() -> Iter<'static, Axis> {
             Axis::RightStickX, Axis::RightStickY
         ];
     return AXES.iter();
+}
+
+fn triggers_iterator() -> Iter<'static, Axis> {
+    static TRIGGERS: [Axis; 2] =
+    [
+        Axis::LeftZ, Axis::RightZ
+    ];
+    return TRIGGERS.iter();
 }
