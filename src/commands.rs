@@ -6,10 +6,10 @@ use crate::network::Protocol;
 
 pub trait Command {
     fn data(&self) -> String;
-    fn byteData(&self) -> &Vec<u8>;
+    fn byte_data(&self) -> &Vec<u8>;
 }
 
-struct AttachCommand {
+pub struct AttachCommand {
     handle: i32,
     vid: i16,
     pid: i16,
@@ -40,12 +40,12 @@ impl Command for AttachCommand {
         format!("AttachCommand [vid={}, pid={}, handle={}, sender={}]", self.vid, self.pid, self.handle, self.sender)
     }
 
-    fn byteData(&self) -> &Vec<u8> {
+    fn byte_data(&self) -> &Vec<u8> {
         &self.data
     }
 }
 
-struct DetachCommand {
+pub struct DetachCommand {
     handle: i32,
     sender: i32,
     data: Vec<u8>
@@ -70,12 +70,12 @@ impl Command for DetachCommand {
         format!("DetachCommand [handle={}, sender={}]", self.handle, self.sender)
     }
 
-    fn byteData(&self) -> &Vec<u8> {
+    fn byte_data(&self) -> &Vec<u8> {
         &self.data
     }
 }
 
-struct WriteCommand {
+pub struct WriteCommand {
     handle: i32,
     sender: i32,
     data: Vec<u8>
@@ -96,12 +96,12 @@ impl Command for WriteCommand {
         format!("WriteCommand [handle={}, sender={}]", self.handle, self.sender)
     }
 
-    fn byteData(&self) -> &Vec<u8> {
+    fn byte_data(&self) -> &Vec<u8> {
         &self.data
     }
 }
 
-struct PingCommand {
+pub struct PingCommand {
     data: Vec<u8>
 }
 
@@ -118,7 +118,7 @@ impl Command for PingCommand {
         "PingCommand []".to_owned()
     }
 
-    fn byteData(&self) -> &Vec<u8> {
+    fn byte_data(&self) -> &Vec<u8> {
         &self.data
     }
 }

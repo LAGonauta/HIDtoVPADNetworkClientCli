@@ -3,6 +3,8 @@ use std::{rc::Rc, slice::Iter, sync::Arc};
 use bytebuffer::ByteBuffer;
 use gilrs::{Axis, Button, Gamepad, GamepadId, Gilrs};
 
+use crate::commands::AttachCommand;
+
 static PID: i32 = 0x1337;
 static VID: i32 = 0x7331;
 pub struct ControllerManager {

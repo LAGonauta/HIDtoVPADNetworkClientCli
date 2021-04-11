@@ -1,75 +1,74 @@
-use std::{net::{SocketAddr, TcpStream}, time::Duration};
-use std::io::{Write, Read};
+use std::{net::{SocketAddr, TcpStream, UdpSocket}, time::Duration};
+use std::io::Write;
+use byteorder::{NetworkEndian, ReadBytesExt, WriteBytesExt};
+
+use crate::commands::{AttachCommand, Command};
 
 static PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion::Version3;
 
-pub fn connect(_ip: &str) -> ConnectResult {
+pub fn connect(_ip: &str, controller_handle: i32) -> ConnectResult {
     let addr = SocketAddr::from(([192,168,15,15], Protocol::TcpPort.into()));
-    match TcpStream::connect_timeout(&addr, Duration::from_secs(2)) {
+    let mut tcp_stream = match TcpStream::connect_timeout(&addr, Duration::from_secs(2)) {
         Ok(mut stream) => {
             println!("Connected to the server!");
             let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
             let _ = stream.set_write_timeout(Some(Duration::from_secs(2)));
 
             match handshake(&mut stream) {
-                HandshakeResult::Bad => println!("Handshake timeout"),
+                HandshakeResult::Bad => {
+                    println!("Handshake timeout");
+                    return ConnectResult::Bad;
+                }
                 HandshakeResult::Good => {}
             };
 
-            ConnectResult::Good(stream)
+            stream
         }
         Err(_) => {
             println!("Couldn't connect to server...");
-            ConnectResult::Bad
-        }
-    }
-}
-
-fn handshake(stream: &mut TcpStream) -> HandshakeResult {
-    let mut buffer = [0; 1];
-    match stream.read(&mut buffer) {
-        Ok(count) => {
-            if count == 0 {
-                return HandshakeResult::Bad;
-            }
-        },
-        Err(e) => {
-            return HandshakeResult::Bad;
+            return ConnectResult::Bad;
         }
     };
 
-    let server_protocol_version: ProtocolVersion = buffer[0].into();
+    //(tcp_stream, )
+    if !attach_controller(controller_handle, &mut tcp_stream) {
+        println!("Unable to attach");
+    }
+    ConnectResult::Good(tcp_stream)
+}
+
+// pub fn udp_connect(_ip: &str) -> UdpSocket {
+    
+// }
+
+fn attach_controller(controller_handle: i32, stream: &mut TcpStream) -> bool {
+    let command = AttachCommand::new(controller_handle, 0x7331, 0x1337, 1);
+    send_attach(&command, stream)
+}
+
+fn handshake(stream: &mut TcpStream) -> HandshakeResult {
+    let server_protocol_version = match stream.read_u8() {
+        Ok(val) => val,
+        Err(_e) => return HandshakeResult::Bad
+    };
+    
     println!("Server Version: {:?}", server_protocol_version);
 
-    if server_protocol_version != ProtocolVersion::Version3 {
+    if server_protocol_version != ProtocolVersion::Version3.into() {
         println!("We only support {:?}, aborting. Current: {:?}", ProtocolVersion::Version3, server_protocol_version);
         return HandshakeResult::Bad;
     }
 
-    buffer[0] = server_protocol_version.into();
-    match stream.write(&buffer) {
-        Ok(count) => {
-            if count == 0 {
-                return HandshakeResult::Bad;
-            }
-        },
-        Err(e) => {
-            return HandshakeResult::Bad;
-        }
+    match stream.write_u8(server_protocol_version) {
+        Ok(_) => {},
+        Err(_e) => return HandshakeResult::Bad
     }
 
-    match stream.read(&mut buffer) {
-        Ok(count) => {
-            if count == 0 {
-                return HandshakeResult::Bad;
-            }
-        },
-        Err(e) => {
-            return HandshakeResult::Bad;
-        }
-    };
+    let final_response: ProtocolVersion = match stream.read_u8() {
+        Ok(val) => val,
+        Err(_e) => return HandshakeResult::Bad
+    }.into();
 
-    let final_response: ProtocolVersion = buffer[0].into();
     match final_response {
         ProtocolVersion::Unknown => {
             println!("Something stranged happend while connecting. Try to use the newest version of HIDtoVPAD and this network client.");
@@ -85,6 +84,60 @@ fn handshake(stream: &mut TcpStream) -> HandshakeResult {
     return HandshakeResult::Good;
 }
 
+fn send_attach(command: &AttachCommand, stream: &mut TcpStream) -> bool {
+    match stream.write_all(command.byte_data()) {
+        Ok(_) => {}
+        Err(_) => return false
+    }
+
+    let config_found = match stream.read_u8() {
+        Ok(val) => val,
+        Err(_) => return false
+    };
+    if config_found == 0 {
+        println!("Failed to get byte.");
+        return false;
+    } else if config_found == Protocol::TcpCommandAttachConfigNotFound.into() {
+        println!("No config found for this device.");
+    } else if config_found == Protocol::TcpCommandAttachConfigFound.into() {
+        println!("Config found for this device.");
+    } else {
+        println!("Should not get this far :(");
+    }
+
+    let user_data_okay = match stream.read_u8() {
+        Ok(val) => val,
+        Err(_) => return false
+    };
+    if user_data_okay == 0 {
+        println!("Failed to get byte.");
+        return  false;
+    } else if user_data_okay == Protocol::TcpCommandAttachUserdataBad.into() {
+        println!("Bad user data.");
+    } else if user_data_okay == Protocol::TcpCommandAttachUserdataOkay.into() {
+        println!("User data OK.");
+    } else {
+        println!("Should not get this far :(");
+    }
+
+    let device_slot = match stream.read_i16::<NetworkEndian>() {
+        Ok(val) => val,
+        Err(_) => return false
+    };
+
+    let padslot = match stream.read_i8() {
+        Ok(val) => val,
+        Err(_) => return false
+    };
+
+    if device_slot < 0 || padslot < 0 {
+        println!("Recieving data after sending a attach failed for device ({}) failed. We need to disconnect =(", 0);// command.getSender()
+        return false;
+    }
+
+    return true;
+}
+
 pub fn close(stream: &mut TcpStream) {
     let mut buffer = [0; 1];
     buffer[0] = ProtocolVersion::Abort.into();
@@ -94,6 +147,8 @@ pub fn close(stream: &mut TcpStream) {
     };
 }
 
+
+
 #[derive(Copy, Clone)]
 enum HandshakeResult {
     Bad,
@@ -102,6 +157,7 @@ enum HandshakeResult {
 
 pub enum ConnectResult {
     Bad,
+    //Good((TcpStream, UdpSocket))
     Good(TcpStream)
 }
 
