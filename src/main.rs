@@ -3,6 +3,7 @@ mod ff_simple;
 mod go;
 mod network;
 mod commands;
+mod controller_manager;
 
 fn main() {
     let mut stream = match network::connect("192.168.15.15") {
