@@ -12,7 +12,7 @@ pub fn go() {
         println!("{} is {:?}", gamepad.name(), gamepad.power_info());
     }
     
-    let loop_sleep_duration = Duration::from_millis(1);
+    let loop_sleep_duration = Duration::from_millis(10);
     loop {
         while let Some(Event { id: _, event: _, time: _ }) = gilrs.next_event() {
             //println!("{:?} New event from {}: {:?}", time, id, event);
