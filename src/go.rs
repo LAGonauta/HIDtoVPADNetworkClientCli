@@ -1,6 +1,6 @@
 use std::{iter::FromIterator, slice::Iter, time::Duration};
 
-use gilrs::{Gilrs, Button, Event};
+use gilrs::{Gilrs, Button, Event, Axis};
 
 pub fn go() {
     let mut gilrs = Gilrs::new().unwrap();
@@ -21,6 +21,7 @@ pub fn go() {
     
         // You can also use cached gamepad state
         let mut buttons_state = 0;
+        let mut stick_state = 0;
         if let Some(id) = gamepad_id {
             let gamepad = gilrs.gamepad(id);
 
@@ -29,9 +30,14 @@ pub fn go() {
                 .map(|&button| map_button_state(button))
                 .fold(0, |accumulated, element| accumulated | element);
 
-            //if gamepad.axis_code(axis)
+            stick_state = axes_iterator()
+                .map(|&axis| (axis, gamepad.axis_data(axis)))
+                .filter(|axis| axis.1.is_some())
+                .map(|axis| (axis.0, axis.1.unwrap()))
+                .map(|axis| map_axis_data(axis.1.value(), axis.0))
+                .fold(0, |accumulated, element| accumulated | element);
         }
-        print!("Buttons state: {:?}.           \r", buttons_state);
+        print!("Stick: {:#034b}. Buttons state: {:#08}.     \r", stick_state, buttons_state);
 
         std::thread::sleep(Duration::from_millis(1));
     }
@@ -70,6 +76,22 @@ fn map_button_state(button: Button) -> i32 {
     }
 }
 
+fn map_axis_data(value: f32, axis: Axis) -> i32 {
+    let result = (((value * 128.0) + 128.0) as u8) as i32;
+
+    match axis {
+        Axis::LeftStickX => result << 24,
+        Axis::LeftStickY => result << 16,
+        Axis::LeftZ => 0,
+        Axis::RightStickX => result << 8,
+        Axis::RightStickY => result << 0,
+        Axis::RightZ => 0,
+        Axis::DPadX => 0,
+        Axis::DPadY => 0,
+        Axis::Unknown => 0
+    }
+}
+
 fn buttons_iterator() -> Iter<'static, Button> {
     static BUTTONS: [Button; 19] =
         [
@@ -81,4 +103,13 @@ fn buttons_iterator() -> Iter<'static, Button> {
             Button::Mode
         ];
     return BUTTONS.iter();
+}
+
+fn axes_iterator() -> Iter<'static, Axis> {
+    static AXES: [Axis; 4] =
+        [
+            Axis::LeftStickX, Axis::LeftStickY,
+            Axis::RightStickX, Axis::RightStickY
+        ];
+    return AXES.iter();
 }
