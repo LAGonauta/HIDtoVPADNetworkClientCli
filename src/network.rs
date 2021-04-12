@@ -30,16 +30,35 @@ pub fn connect(_ip: &str, controller_handle: i32) -> ConnectResult {
         }
     };
 
+    let udp_stream = udp_connect("ip").unwrap();
+
     //(tcp_stream, )
     if !attach_controller(controller_handle, &mut tcp_stream) {
         println!("Unable to attach");
     }
-    ConnectResult::Good(tcp_stream)
+    ConnectResult::Good((tcp_stream, udp_stream))
 }
 
-// pub fn udp_connect(_ip: &str) -> UdpSocket {
-    
-// }
+pub fn udp_connect(_ip: &str) -> Option<UdpSocket> {
+    let socket = match UdpSocket::bind(format!("0.0.0.0:{}", Protocol::UdpClientPort as i16)) {
+        Ok(val) => val,
+        Err(e) => {
+            println!("Unable to bind UDP: {}", e);
+            return None
+        }
+    };
+
+    let addr = format!("192.168.15.15:{}", Protocol::UdpPort as i16);
+    match socket.connect(addr) {
+        Ok(_) => {},
+        Err(e) => {
+            println!("Unable to connect UDP: {}", e);
+            return None
+        }
+    }
+
+    return Some(socket);
+}
 
 fn attach_controller(controller_handle: i32, stream: &mut TcpStream) -> bool {
     let command = AttachCommand::new(controller_handle, 0x7331, 0x1337, 1);
@@ -157,8 +176,8 @@ enum HandshakeResult {
 
 pub enum ConnectResult {
     Bad,
-    //Good((TcpStream, UdpSocket))
-    Good(TcpStream)
+    Good((TcpStream, UdpSocket))
+    //Good(TcpStream)
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]

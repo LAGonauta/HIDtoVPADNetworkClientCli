@@ -1,6 +1,7 @@
 use std::{fmt, io::{Read, Write}};
 
 use bytebuffer::ByteBuffer;
+use byteorder::{NetworkEndian, WriteBytesExt};
 
 use crate::network::Protocol;
 
@@ -77,16 +78,29 @@ impl Command for DetachCommand {
 
 pub struct WriteCommand {
     handle: i32,
+    device_slot: i16,
+    pad_slot: i8,
     sender: i32,
     data: Vec<u8>
 }
 
 impl WriteCommand {
-    pub fn new(handle: i32, sender: i32, data: Vec<u8>) -> WriteCommand {
+    pub fn new(handle: i32, device_slot: i16, pad_slot: i8, sender: i32, data: Vec<u8>) -> WriteCommand {
+        let mut buffer = ByteBuffer::new();
+        buffer.write_u8(Protocol::UdpCommandData.into());
+        buffer.write_u8(0x01); // single command, will need to change that for batch
+        buffer.write_i32(handle);
+        buffer.write_i16(device_slot);
+        buffer.write_i8(pad_slot);
+        buffer.write_i8((data.len() & 0xFF) as i8);
+        buffer.write_all(&data).unwrap();
+
         WriteCommand {
             handle,
+            device_slot,
+            pad_slot,
             sender,
-            data
+            data: buffer.to_bytes()
         }
     }
 }

@@ -25,34 +25,32 @@ impl ControllerManager {
     // Allocates once
     pub fn poll_mut(&mut self, gamepad: &Gamepad) -> Vec<u8> {
 
-        let (buttons_state, stick_state, trigger_state) =
+        let (buttons_state, stick_state) =
             self.fetch(gamepad);
 
         self.data.clear();
 
-        self.data.write_i32(buttons_state);
         self.data.write_i32(stick_state);
-        self.data.write_i16(trigger_state);
+        self.data.write_i32(buttons_state);
 
         self.data.to_bytes()
     }
 
     // Allocates twice
     pub fn poll(&self, gamepad: &Gamepad) -> Vec<u8> {
-        let (buttons_state, stick_state, trigger_state) =
+        let (buttons_state, stick_state) =
             self.fetch(gamepad);
 
         let mut data = ByteBuffer::new();
 
-        data.write_i32(buttons_state);
         data.write_i32(stick_state);
-        data.write_i16(trigger_state);
+        data.write_i32(buttons_state);
 
         data.to_bytes()
     }
 
-    fn fetch(&self, gamepad: &Gamepad) -> (i32, i32, i16) {
-        let buttons_state =
+    fn fetch(&self, gamepad: &Gamepad) -> (i32, i32) {
+        let mut buttons_state =
         ControllerManager::buttons_iterator()
             .filter(|&&button| gamepad.is_pressed(button))
             .map(|&button| ControllerManager::map_button_state(button))
@@ -74,9 +72,16 @@ impl ControllerManager {
             .map(|trigger| ControllerManager::map_trigger_data(trigger.1.value(), trigger.0))
             .fold(0, |accumulated, element| accumulated | element);
 
-        print!("Stick: {:#034b}. Triggers: {:#018b}. Buttons state: {:#08}.     \r", stick_state, trigger_state, buttons_state);
+        buttons_state = buttons_state | self.overflow(trigger_state as i32);
 
-        (buttons_state, stick_state, trigger_state)
+        //print!("Stick: {:#034b}. Triggers: {:#018b}. Buttons state: {:#08}.     \r", stick_state, trigger_state, buttons_state);
+
+        (buttons_state, stick_state)
+    }
+
+    #[allow(arithmetic_overflow)]
+    fn overflow(&self, state: i32) -> i32 {
+        state << 16
     }
 
     fn buttons_iterator() -> Iter<'static, Button> {
@@ -113,8 +118,8 @@ impl ControllerManager {
         match button {
             Button::South => 1 << 0,
             Button::East => 1 << 1,
-            Button::West => 1 << 2,
-            Button::North => 1 << 3,
+            Button::North => 1 << 2,
+            Button::West => 1 << 3,
     
             Button::DPadLeft => 1 << 4,
             Button::DPadUp => 1 << 5,

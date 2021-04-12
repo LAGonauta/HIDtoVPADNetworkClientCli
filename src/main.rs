@@ -10,7 +10,14 @@ mod handle_factory;
 
 fn main() {
     let mut handle_factory = HandleFactory::new();
-    let controller_handle = handle_factory.next();
+    //let controller_handle = handle_factory.next();
+    let controller_handle = 1234;
+
+    // 1. build controllers with gamepadId and handle
+
+    // 2. connect
+
+    // 3. send data
 
     let mut connection = match network::connect("192.168.15.15", controller_handle) {
         network::ConnectResult::Bad => {
@@ -20,9 +27,9 @@ fn main() {
         network::ConnectResult::Good(stream) => stream
     };
 
-    network::close(&mut connection);
+    go::go(&mut connection.1);
 
-    //go::go();
+    network::close(&mut connection.0);
     //ff::ff();
     //ff_simple::ff_simple();
 }
