@@ -6,11 +6,11 @@ use crate::commands::{AttachCommand, Command};
 
 static PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion::Version3;
 
-pub fn connect(_ip: &str, controller_handle: i32) -> ConnectResult {
-    let addr = SocketAddr::from(([192,168,15,15], Protocol::TcpPort.into()));
+pub fn connect(ip: &str, controller_handle: i32) -> ConnectResult {
+    let addr: SocketAddr = format!("{}:{}", ip, Protocol::TcpPort as i16)
+        .parse().expect("Unable to parse socket address");
     let mut tcp_stream = match TcpStream::connect_timeout(&addr, Duration::from_secs(2)) {
         Ok(mut stream) => {
-            println!("Connected to the server!");
             let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
             let _ = stream.set_write_timeout(Some(Duration::from_secs(2)));
 
@@ -30,16 +30,18 @@ pub fn connect(_ip: &str, controller_handle: i32) -> ConnectResult {
         }
     };
 
-    let udp_stream = udp_connect("ip").unwrap();
+    let udp_stream = match udp_connect(ip) {
+        Some(val) => val,
+        None => return ConnectResult::Bad
+    };
 
-    //(tcp_stream, )
     if !attach_controller(controller_handle, &mut tcp_stream) {
         println!("Unable to attach");
     }
     ConnectResult::Good((tcp_stream, udp_stream))
 }
 
-pub fn udp_connect(_ip: &str) -> Option<UdpSocket> {
+fn udp_connect(ip: &str) -> Option<UdpSocket> {
     let socket = match UdpSocket::bind(format!("0.0.0.0:{}", Protocol::UdpClientPort as i16)) {
         Ok(val) => val,
         Err(e) => {
@@ -48,7 +50,7 @@ pub fn udp_connect(_ip: &str) -> Option<UdpSocket> {
         }
     };
 
-    let addr = format!("192.168.15.15:{}", Protocol::UdpPort as i16);
+    let addr = format!("{}:{}", ip, Protocol::UdpPort as i16);
     match socket.connect(addr) {
         Ok(_) => {},
         Err(e) => {
@@ -219,6 +221,7 @@ pub enum Protocol {
     TcpCommandAttach = 0x01,
     TcpCommandDetach = 0x02,
     TcpCommandPing = 0xF0,
+    TcpCommandPong = 0xF1,
 
     TcpCommandAttachConfigFound = 0xE0,
     TcpCommandAttachConfigNotFound = 0xE1,

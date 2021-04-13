@@ -1,42 +1,20 @@
-use std::{rc::Rc, slice::Iter, sync::Arc};
+use std::slice::Iter;
 
 use bytebuffer::ByteBuffer;
-use gilrs::{Axis, Button, Gamepad, GamepadId, Gilrs};
+use gilrs::{Axis, Button, Gamepad, Gilrs};
 
-use crate::commands::AttachCommand;
 
-static PID: i32 = 0x1337;
-static VID: i32 = 0x7331;
-pub struct ControllerManager {
-    data: ByteBuffer
-}
+pub struct ControllerManager {}
 
 impl ControllerManager {
     pub fn new() -> ControllerManager {
-        ControllerManager {
-            data: ByteBuffer::new()
-        }
+        ControllerManager {}
     }
 
     pub fn prepare(gilrs: &mut Gilrs) {
         while let Some(_) = gilrs.next_event() {}
     }
 
-    // Allocates once
-    pub fn poll_mut(&mut self, gamepad: &Gamepad) -> Vec<u8> {
-
-        let (buttons_state, stick_state) =
-            self.fetch(gamepad);
-
-        self.data.clear();
-
-        self.data.write_i32(stick_state);
-        self.data.write_i32(buttons_state);
-
-        self.data.to_bytes()
-    }
-
-    // Allocates twice
     pub fn poll(&self, gamepad: &Gamepad) -> Vec<u8> {
         let (buttons_state, stick_state) =
             self.fetch(gamepad);

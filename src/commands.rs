@@ -1,11 +1,10 @@
-use std::{fmt, io::{Read, Write}};
+use std::io::Write;
 
 use bytebuffer::ByteBuffer;
-use byteorder::{NetworkEndian, WriteBytesExt};
 
 use crate::network::Protocol;
 
-pub trait Command {
+pub trait Command : Send {
     fn data(&self) -> String;
     fn byte_data(&self) -> &Vec<u8>;
 }
@@ -78,8 +77,6 @@ impl Command for DetachCommand {
 
 pub struct WriteCommand {
     handle: i32,
-    device_slot: i16,
-    pad_slot: i8,
     sender: i32,
     data: Vec<u8>
 }
@@ -97,8 +94,6 @@ impl WriteCommand {
 
         WriteCommand {
             handle,
-            device_slot,
-            pad_slot,
             sender,
             data: buffer.to_bytes()
         }
