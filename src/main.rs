@@ -81,8 +81,9 @@ fn main() {
                         }
             
                         // move the ping to another thread for lower latency
-                        if last_ping.elapsed() > ping_interval { // try to change to +
-                            //println!("Ping!");
+                        let now = Instant::now();
+                        if now > last_ping + ping_interval {
+                            println!("Ping!");
                             match connection.0.write_all(ping.byte_data()) {
                                 Err(e) => {
                                     println!("Unable to ping :(. Reconnecting... Error: {}", e);
@@ -93,7 +94,7 @@ fn main() {
                                     match connection.0.read_u8() {
                                         Ok(val) => {
                                             if val == Protocol::TcpCommandPong.into() {
-                                                //println!("Pong!")
+                                                println!("Pong!")
                                             } else {
                                                 connection_optional = None;
                                                 continue;
@@ -106,7 +107,7 @@ fn main() {
                                     }
                                 }
                             };
-                            last_ping = Instant::now();
+                            last_ping = now;
                         }
                     },
                     None => {
