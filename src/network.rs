@@ -1,15 +1,125 @@
-use std::{net::{SocketAddr, TcpStream, UdpSocket}, time::Duration};
+use std::{net::{SocketAddr, TcpStream, UdpSocket}, sync::{Arc, atomic::AtomicBool, atomic::Ordering}, thread::{self, JoinHandle}, time::{Duration, Instant}};
 use std::io::Write;
 use byteorder::{NetworkEndian, ReadBytesExt, WriteBytesExt};
+use crossbeam_channel::{Receiver, Sender};
 
-use crate::commands::{AttachCommand, Command};
+use crate::commands::{AttachCommand, Command, PingCommand};
 
 static PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion::Version3;
 
-pub fn connect(ip: &str, controller_handle: i32) -> ConnectResult {
+pub fn start_thread(ip: &str, command_receiver: Receiver<Message> , should_shutdown: Arc<AtomicBool>) -> JoinHandle<()> {
+    let ip_copy = ip.to_owned();
+
+    thread::spawn({
+        let should_shutdown = should_shutdown.clone();
+        move || {
+            let connect = || {
+                loop {
+                    match connect(&ip_copy) {
+                        ConnectResult::Bad => {
+                            println!("Unable to connect :(, trying again in 2 seconds.");
+                            if should_shutdown.load(Ordering::Relaxed) {
+                                return None;
+                            }
+                            thread::sleep(Duration::from_secs(2));
+                        },
+                        ConnectResult::Good(stream) => {
+                            println!("Connected to the server!");
+                            return Some(stream);
+                        }
+                    };
+                }
+            };
+    
+            let mut connection_optional = connect();
+            let timeout = Duration::from_secs(1);
+            let ping_interval = Duration::from_secs(1);
+            let ping = PingCommand::new();
+            let mut last_ping = Instant::now();
+            loop {
+    
+                if should_shutdown.load(Ordering::Relaxed) {
+                    if let Some(connection) = &mut connection_optional {
+                        close(&mut connection.tcp);
+                    }
+                    return;
+                }
+    
+                match &mut connection_optional {
+                    Some(connection) => {
+                        if let Ok(val) = command_receiver.recv_timeout(timeout) {
+                            match val {
+                                Message::Terminate => return,
+                                Message::UdpData(data) => {
+                                    if let Err(e) = connection.udp.send(data.byte_data()) {
+                                        println!("Unable to send UDP data :(. Dropping and reconnecting. Error: {}", e);
+                                        connection_optional = None;
+                                        continue;
+                                    }
+                                }
+                                Message::TcpData(data) => {
+                                    if let Err(e) = connection.tcp.write_all(data.byte_data()) {
+                                        println!("Unable to send TCP data :(. Dropping and reconnecting. Error: {}", e);
+                                        connection_optional = None;
+                                        continue;
+                                    }
+                                }
+                                Message::Attach(val) => {
+                                    match attach_controller(val.0, &mut connection.tcp) {
+                                        Some(result) => {
+                                            let _ = val.1.send(result);
+                                        }
+                                        None => {
+                                            let _ = val.1.send((-1, -1));
+                                        }
+                                    }
+                                }
+                            };
+                        }
+            
+                        // move the ping to another thread for lower latency
+                        let now = Instant::now();
+                        if now > last_ping + ping_interval {
+                            //println!("Ping!");
+                            match connection.tcp.write_all(ping.byte_data()) {
+                                Err(e) => {
+                                    println!("Unable to ping :(. Reconnecting... Error: {}", e);
+                                    connection_optional = None;
+                                    continue;
+                                }
+                                Ok(_) => {
+                                    match connection.tcp.read_u8() {
+                                        Ok(val) => {
+                                            if val == Protocol::TcpCommandPong.into() {
+                                                //println!("Pong!")
+                                            } else {
+                                                connection_optional = None;
+                                                continue;
+                                            }
+                                        },
+                                        Err(_) => {
+                                            connection_optional = None;
+                                            continue;
+                                        }
+                                    }
+                                }
+                            };
+                            last_ping = now;
+                        }
+                    },
+                    None => {
+                        connection_optional = connect();
+                    }
+                }
+            }
+        }
+    })
+}
+
+fn connect(ip: &str) -> ConnectResult {
     let addr: SocketAddr = format!("{}:{}", ip, Protocol::TcpPort as i16)
         .parse().expect("Unable to parse socket address");
-    let mut tcp_stream = match TcpStream::connect_timeout(&addr, Duration::from_secs(2)) {
+    let tcp_stream = match TcpStream::connect_timeout(&addr, Duration::from_secs(2)) {
         Ok(mut stream) => {
             let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
             let _ = stream.set_write_timeout(Some(Duration::from_secs(2)));
@@ -35,9 +145,6 @@ pub fn connect(ip: &str, controller_handle: i32) -> ConnectResult {
         None => return ConnectResult::Bad
     };
 
-    if !attach_controller(controller_handle, &mut tcp_stream) {
-        println!("Unable to attach");
-    }
     ConnectResult::Good(Connection { tcp: tcp_stream, udp: udp_stream })
 }
 
@@ -62,7 +169,7 @@ fn udp_connect(ip: &str) -> Option<UdpSocket> {
     return Some(socket);
 }
 
-fn attach_controller(controller_handle: i32, stream: &mut TcpStream) -> bool {
+fn attach_controller(controller_handle: i32, stream: &mut TcpStream) -> Option<(i16, i8)> {
     let command = AttachCommand::new(controller_handle, 0x7331, 0x1337, 1);
     send_attach(&command, stream)
 }
@@ -105,19 +212,19 @@ fn handshake(stream: &mut TcpStream) -> HandshakeResult {
     return HandshakeResult::Good;
 }
 
-fn send_attach(command: &AttachCommand, stream: &mut TcpStream) -> bool {
+fn send_attach(command: &AttachCommand, stream: &mut TcpStream) -> Option<(i16, i8)> {
     match stream.write_all(command.byte_data()) {
         Ok(_) => {}
-        Err(_) => return false
+        Err(_) => return None
     }
 
     let config_found = match stream.read_u8() {
         Ok(val) => val,
-        Err(_) => return false
+        Err(_) => return None
     };
     if config_found == 0 {
         println!("Failed to get byte.");
-        return false;
+        return None;
     } else if config_found == Protocol::TcpCommandAttachConfigNotFound.into() {
         println!("No config found for this device.");
     } else if config_found == Protocol::TcpCommandAttachConfigFound.into() {
@@ -128,11 +235,11 @@ fn send_attach(command: &AttachCommand, stream: &mut TcpStream) -> bool {
 
     let user_data_okay = match stream.read_u8() {
         Ok(val) => val,
-        Err(_) => return false
+        Err(_) => return None
     };
     if user_data_okay == 0 {
         println!("Failed to get byte.");
-        return  false;
+        return None;
     } else if user_data_okay == Protocol::TcpCommandAttachUserdataBad.into() {
         println!("Bad user data.");
     } else if user_data_okay == Protocol::TcpCommandAttachUserdataOkay.into() {
@@ -143,23 +250,23 @@ fn send_attach(command: &AttachCommand, stream: &mut TcpStream) -> bool {
 
     let device_slot = match stream.read_i16::<NetworkEndian>() {
         Ok(val) => val,
-        Err(_) => return false
+        Err(_) => return None
     };
 
     let padslot = match stream.read_i8() {
         Ok(val) => val,
-        Err(_) => return false
+        Err(_) => return None
     };
 
     if device_slot < 0 || padslot < 0 {
-        println!("Recieving data after sending a attach failed for device ({}) failed. We need to disconnect =(", 0);// command.getSender()
-        return false;
+        println!("Receiving data after sending a attach failed for device ({}) failed. We need to disconnect =(", 0);
+        return None;
     }
 
-    return true;
+    return Some((device_slot, padslot));
 }
 
-pub fn close(stream: &mut TcpStream) {
+fn close(stream: &mut TcpStream) {
     let mut buffer = [0; 1];
     buffer[0] = ProtocolVersion::Abort.into();
     let _ = match stream.write(&buffer) {
@@ -167,8 +274,6 @@ pub fn close(stream: &mut TcpStream) {
         Err(e) => println!("Unable to close connection: {:?}", e)
     };
 }
-
-
 
 #[derive(Copy, Clone)]
 enum HandshakeResult {
@@ -245,7 +350,8 @@ impl Into<u8> for Protocol {
 pub enum Message {
     Terminate,
     TcpData(Box<dyn Command>),
-    UdpData(Box<dyn Command>)
+    UdpData(Box<dyn Command>),
+    Attach((i32, Sender<(i16, i8)>))
 }
 
 pub struct Connection {

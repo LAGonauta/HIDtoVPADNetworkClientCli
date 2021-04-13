@@ -1,36 +1,61 @@
-use std::time::Duration;
+use std::{thread, time::Duration};
 
 use crossbeam_channel::Sender;
-use gilrs::Gilrs;
+use gilrs::{GamepadId, Gilrs};
 
-use crate::{commands::WriteCommand, controller_manager::ControllerManager, network::Message};
+use crate::{commands::WriteCommand, controller_manager::ControllerManager, handle_factory::HandleFactory, network::Message};
 
 pub fn go(sender: Sender<Message>) {
     let mut gilrs = Gilrs::new().unwrap();
 
-    // Iterate over all connected gamepads
-    let mut gamepad_id = None;
+    // Iterate over all connected gamepads and attach them
+    let mut handle_factory = HandleFactory::new();
+    let mut controllers = Vec::new();
+    let (s, r) = crossbeam_channel::bounded(0);
     for (id, gamepad) in gilrs.gamepads() {
-        gamepad_id = Some(id);
-        println!("{} is {:?}", gamepad.name(), gamepad.power_info());
+        let handle = handle_factory.next();
+        match sender.send(Message::Attach((handle, s.clone()))) {
+            Ok(_) => {
+                match r.recv() {
+                    Ok(val) => {
+                        if val.0 < 0 || val.1 < 0 {
+                            println!("Unable to attach controller, invalid slots.")
+                        } else {
+                            controllers.push(Controller { id: id, handle: handle, device_slot: val.0, pad_slot: val.1 });
+                            println!("{} is {:?}. Attached!", gamepad.name(), gamepad.power_info());
+                        }
+                    }
+                    Err(e) => println!("Unable to attach controller, error on receive.")
+                };
+            },
+            Err(e) => println!("Unable to attach controller, error on send.")
+        }
+
     }
 
-    if let Some(id) = gamepad_id {
-        let loop_sleep_duration = Duration::from_millis(10);
-        let controller_manager = ControllerManager::new();
-        loop {
+    let controller_manager = ControllerManager::new();
+    let loop_sleep_duration = Duration::from_millis(10);
+    loop {
+        for controller in &controllers {
             ControllerManager::prepare(&mut gilrs);
-            let gamepad = gilrs.gamepad(id);
+            let gamepad = gilrs.gamepad(controller.id);
 
             let write_command =
-                WriteCommand::new(1234, 6, 0, 1, controller_manager.poll(&gamepad));
+                WriteCommand::new(controller.handle, controller.device_slot, controller.pad_slot, 1, controller_manager.poll(&gamepad));
 
             match sender.send(Message::UdpData(Box::new(write_command))) {
                 Err(e) => println!("Unable to send data to thread: {}", e),
                 Ok(_) => {}
             }
-    
-            std::thread::sleep(loop_sleep_duration);
         }
+
+        thread::sleep(loop_sleep_duration);
     }
+}
+
+struct Controller {
+    pub id: GamepadId,
+    pub handle: i32,
+    pub device_slot: i16,
+    pub pad_slot: i8
 }
