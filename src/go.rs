@@ -1,6 +1,6 @@
-use std::{thread, time::Duration};
+use std::{sync::{Arc, atomic::{AtomicBool, Ordering}}, thread, time::Duration};
 
-use crossbeam_channel::{Receiver, Sender};
+use flume::{Receiver, Sender};
 use gilrs::{GamepadId, Gilrs};
 
 use crate::{commands::WriteCommand, controller_manager::ControllerManager, handle_factory::HandleFactory, network::Message};
@@ -11,7 +11,7 @@ pub fn go(sender: Sender<Message>, controller_receiver: Receiver<(i32, i16, i8)>
     // Iterate over all connected gamepads and attach them
     let mut handle_factory = HandleFactory::new();
     let mut controllers = Vec::new();
-    let (s, r) = crossbeam_channel::bounded(0);
+    let (s, r) = flume::bounded(0);
     for (id, gamepad) in gilrs.gamepads() {
         let handle = handle_factory.next();
         match sender.send(Message::Attach((handle, s.clone()))) {

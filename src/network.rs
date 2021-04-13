@@ -1,7 +1,7 @@
 use std::{net::{SocketAddr, TcpStream, UdpSocket}, sync::{Arc, atomic::AtomicBool, atomic::Ordering}, thread::{self, JoinHandle}, time::{Duration, Instant}};
 use std::io::Write;
 use byteorder::{NetworkEndian, ReadBytesExt, WriteBytesExt};
-use crossbeam_channel::{Receiver, Sender};
+use flume::{Receiver, Sender};
 
 use crate::commands::{AttachCommand, Command, PingCommand};
 
@@ -11,7 +11,6 @@ pub fn start_thread(ip: &str, command_receiver: Receiver<Message>, controller_se
     let ip_copy = ip.to_owned();
 
     thread::spawn({
-        let should_shutdown = should_shutdown.clone();
         move || {
             let connect = || {
                 loop {
