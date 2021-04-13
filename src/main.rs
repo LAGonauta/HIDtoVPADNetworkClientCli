@@ -24,7 +24,7 @@ fn main() {
 
     // 3. send data
 
-    go::go(command_sender, controller_receiver);
+    go::go(command_sender, controller_receiver, should_shutdown.clone());
 
     should_shutdown.store(true, Ordering::Relaxed);
     let _ = network_thread.join();

@@ -5,7 +5,7 @@ use gilrs::{GamepadId, Gilrs};
 
 use crate::{commands::WriteCommand, controller_manager::ControllerManager, handle_factory::HandleFactory, network::Message};
 
-pub fn go(sender: Sender<Message>, controller_receiver: Receiver<(i32, i16, i8)>) {
+pub fn go(sender: Sender<Message>, controller_receiver: Receiver<(i32, i16, i8)>, should_shutdown: Arc<AtomicBool>) {
     let mut gilrs = Gilrs::new().unwrap();
 
     // Iterate over all connected gamepads and attach them
@@ -36,6 +36,10 @@ pub fn go(sender: Sender<Message>, controller_receiver: Receiver<(i32, i16, i8)>
     let controller_manager = ControllerManager::new();
     let loop_sleep_duration = Duration::from_millis(10);
     loop {
+        if should_shutdown.load(Ordering::Relaxed) {
+            return;
+        }
+
         while let Ok(val) = controller_receiver.try_recv() {
             if let Some(controller) = controllers.iter_mut().find(|e| e.handle == val.0) {
                 controller.pad_slot = val.2;
