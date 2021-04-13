@@ -38,7 +38,7 @@ pub fn connect(ip: &str, controller_handle: i32) -> ConnectResult {
     if !attach_controller(controller_handle, &mut tcp_stream) {
         println!("Unable to attach");
     }
-    ConnectResult::Good((tcp_stream, udp_stream))
+    ConnectResult::Good(Connection { tcp: tcp_stream, udp: udp_stream })
 }
 
 fn udp_connect(ip: &str) -> Option<UdpSocket> {
@@ -178,8 +178,7 @@ enum HandshakeResult {
 
 pub enum ConnectResult {
     Bad,
-    Good((TcpStream, UdpSocket))
-    //Good(TcpStream)
+    Good(Connection)
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -247,4 +246,9 @@ pub enum Message {
     Terminate,
     TcpData(Box<dyn Command>),
     UdpData(Box<dyn Command>)
+}
+
+pub struct Connection {
+    pub tcp: TcpStream,
+    pub udp: UdpSocket
 }

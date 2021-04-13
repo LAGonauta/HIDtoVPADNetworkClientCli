@@ -53,7 +53,7 @@ fn main() {
     
                 if should_shutdown.load(Ordering::Relaxed) {
                     if let Some(connection) = &mut connection_optional {
-                        network::close(&mut connection.0);
+                        network::close(&mut connection.tcp);
                     }
                     return;
                 }
@@ -64,14 +64,14 @@ fn main() {
                             match val {
                                 Message::Terminate => return,
                                 Message::UdpData(data) => {
-                                    if let Err(e) = connection.1.send(data.byte_data()) {
+                                    if let Err(e) = connection.udp.send(data.byte_data()) {
                                         println!("Unable to send UDP data :(. Dropping and reconnecting. Error: {}", e);
                                         connection_optional = None;
                                         continue;
                                     }
                                 }
                                 Message::TcpData(data) => {
-                                    if let Err(e) = connection.0.write_all(data.byte_data()) {
+                                    if let Err(e) = connection.tcp.write_all(data.byte_data()) {
                                         println!("Unable to send TCP data :(. Dropping and reconnecting. Error: {}", e);
                                         connection_optional = None;
                                         continue;
@@ -84,14 +84,14 @@ fn main() {
                         let now = Instant::now();
                         if now > last_ping + ping_interval {
                             println!("Ping!");
-                            match connection.0.write_all(ping.byte_data()) {
+                            match connection.tcp.write_all(ping.byte_data()) {
                                 Err(e) => {
                                     println!("Unable to ping :(. Reconnecting... Error: {}", e);
                                     connection_optional = None;
                                     continue;
                                 }
                                 Ok(_) => {
-                                    match connection.0.read_u8() {
+                                    match connection.tcp.read_u8() {
                                         Ok(val) => {
                                             if val == Protocol::TcpCommandPong.into() {
                                                 println!("Pong!")
