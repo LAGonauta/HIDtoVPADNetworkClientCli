@@ -1,11 +1,11 @@
 use std::{thread, time::Duration};
 
-use crossbeam_channel::Sender;
+use crossbeam_channel::{Receiver, Sender};
 use gilrs::{GamepadId, Gilrs};
 
 use crate::{commands::WriteCommand, controller_manager::ControllerManager, handle_factory::HandleFactory, network::Message};
 
-pub fn go(sender: Sender<Message>) {
+pub fn go(sender: Sender<Message>, controller_receiver: Receiver<(i32, i16, i8)>) {
     let mut gilrs = Gilrs::new().unwrap();
 
     // Iterate over all connected gamepads and attach them
@@ -36,6 +36,13 @@ pub fn go(sender: Sender<Message>) {
     let controller_manager = ControllerManager::new();
     let loop_sleep_duration = Duration::from_millis(10);
     loop {
+        while let Ok(val) = controller_receiver.try_recv() {
+            if let Some(controller) = controllers.iter_mut().find(|e| e.handle == val.0) {
+                controller.pad_slot = val.2;
+                controller.device_slot = val.1;
+            }
+        }
+
         for controller in &controllers {
             ControllerManager::prepare(&mut gilrs);
             let gamepad = gilrs.gamepad(controller.id);

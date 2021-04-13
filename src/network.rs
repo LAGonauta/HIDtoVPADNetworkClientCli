@@ -7,7 +7,7 @@ use crate::commands::{AttachCommand, Command, PingCommand};
 
 static PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion::Version3;
 
-pub fn start_thread(ip: &str, command_receiver: Receiver<Message> , should_shutdown: Arc<AtomicBool>) -> JoinHandle<()> {
+pub fn start_thread(ip: &str, command_receiver: Receiver<Message>, controller_sender: Sender<(i32, i16, i8)>, should_shutdown: Arc<AtomicBool>) -> JoinHandle<()> {
     let ip_copy = ip.to_owned();
 
     thread::spawn({
@@ -36,6 +36,7 @@ pub fn start_thread(ip: &str, command_receiver: Receiver<Message> , should_shutd
             let ping_interval = Duration::from_secs(1);
             let ping = PingCommand::new();
             let mut last_ping = Instant::now();
+            let mut attached = Vec::new();
             loop {
     
                 if should_shutdown.load(Ordering::Relaxed) {
@@ -67,7 +68,10 @@ pub fn start_thread(ip: &str, command_receiver: Receiver<Message> , should_shutd
                                 Message::Attach(val) => {
                                     match attach_controller(val.0, &mut connection.tcp) {
                                         Some(result) => {
-                                            let _ = val.1.send(result);
+                                            if let Ok(_) = val.1.send(result) {
+                                                attached.push((val.0, result.0, result.1));
+                                            }
+                                            
                                         }
                                         None => {
                                             let _ = val.1.send((-1, -1));
@@ -109,6 +113,19 @@ pub fn start_thread(ip: &str, command_receiver: Receiver<Message> , should_shutd
                     },
                     None => {
                         connection_optional = connect();
+                        if let Some(connection) = &mut connection_optional {
+                            for controller in &attached {
+                                match attach_controller(controller.0, &mut connection.tcp) {
+                                    Some(val) => {
+                                        if val.0 != controller.1 || val.1 != controller.2 {
+                                            println!("Device_slot and pad_slot are different, updating.");
+                                            let _ = controller_sender.send((controller.0, val.0, val.1));
+                                        }
+                                    },
+                                    None => { println!("Unable to reattach controller, handle: {}", controller.0); }
+                                }
+                            }
+                        }
                     }
                 }
             }

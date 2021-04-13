@@ -7,7 +7,7 @@ pub struct HandleFactory {
 impl HandleFactory {
     pub fn new() -> Self {
         HandleFactory {
-            current: rand::thread_rng().gen()
+            current: 1 //rand::thread_rng().gen()
         }
     }
 
