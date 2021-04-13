@@ -3,9 +3,9 @@ use std::time::Duration;
 use crossbeam_channel::Sender;
 use gilrs::Gilrs;
 
-use crate::{commands::{Command, WriteCommand}, controller_manager::ControllerManager};
+use crate::{commands::WriteCommand, controller_manager::ControllerManager, network::Message};
 
-pub fn go(sender: Sender<Box<dyn Command>>) {
+pub fn go(sender: Sender<Message>) {
     let mut gilrs = Gilrs::new().unwrap();
 
     // Iterate over all connected gamepads
@@ -25,13 +25,10 @@ pub fn go(sender: Sender<Box<dyn Command>>) {
             let write_command =
                 WriteCommand::new(1234, 6, 0, 1, controller_manager.poll(&gamepad));
 
-            //if write_command.byte_data() != last_command.byte_data() {
-                //println!("{:X?}", write_command.byte_data());
-                match sender.send(Box::new(write_command)) {
-                    Err(e) => println!("Unable to send data to thread: {}", e),
-                    Ok(_) => {}
-                }
-            //}
+            match sender.send(Message::UdpData(Box::new(write_command))) {
+                Err(e) => println!("Unable to send data to thread: {}", e),
+                Ok(_) => {}
+            }
     
             std::thread::sleep(loop_sleep_duration);
         }

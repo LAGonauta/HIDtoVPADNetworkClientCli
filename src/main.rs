@@ -1,10 +1,10 @@
-use std::{io::Write, net::{TcpStream, UdpSocket, Shutdown}, thread, time::Instant};
+use std::{io::Write, net::{TcpStream, UdpSocket, Shutdown}, sync::{Arc, atomic::AtomicBool, atomic::Ordering}, thread, time::Instant};
 use std::time::Duration;
 
 use commands::PingCommand;
 use crossbeam_channel::{Sender, Receiver};
 use handle_factory::HandleFactory;
-use network::Protocol;
+use network::{Message, Protocol};
 use crate::{commands::Command};
 use byteorder::ReadBytesExt;
 
@@ -19,72 +19,100 @@ fn main() {
     //let mut handle_factory = HandleFactory::new();
     //let controller_handle = handle_factory.next();
     let controller_handle = 1234;
-    let (command_sender, command_receiver): (Sender<Box<dyn commands::Command>>, Receiver<Box<dyn commands::Command>>) = crossbeam_channel::bounded(10);
-    let (shutdown_sender, shutdown_receiver): (Sender<()>, Receiver<()>) = crossbeam_channel::unbounded();
+    let (command_sender, command_receiver): (Sender<Message>, Receiver<Message>) = crossbeam_channel::bounded(10);
+    let (rumble_sender, rumble_receiver): (Sender<Box<dyn commands::Command>>, Receiver<Box<dyn commands::Command>>) = crossbeam_channel::bounded(10);
+    let should_shutdown = Arc::new(AtomicBool::new(false));
 
-    let network_thread = thread::spawn(move || {
-        let connect = || {
-            loop {
-                match network::connect("192.168.15.15", controller_handle) {
-                    network::ConnectResult::Bad => {
-                        println!("Unable to connect :(, trying again in 2 seconds.");
-                        thread::sleep(Duration::from_secs(2));
-                    },
-                    network::ConnectResult::Good(stream) => {
-                        println!("Connected to the server!");
-                        return stream;
-                    }
-                };
-            }
-        };
-
-        let mut connection = connect();
-        let timeout = Duration::from_secs(1);
-        let ping_interval = Duration::from_secs(1);
-        let ping = PingCommand::new();
-        let mut last_ping = Instant::now();
-        loop {
-
-            if let Ok(val) = command_receiver.recv_timeout(timeout) {
-                if let Err(e) = connection.1.send(val.byte_data()) {
-                    println!("Unable to send data :(. Dropping and reconnecting. Error: {}", e);
-                    connection.1 = UdpSocket::bind("127.0.0.1:12345").unwrap();
-                    connection = connect();
-                }
-            }
-
-            // move the ping to another thread for lower latency
-            if last_ping.elapsed() > ping_interval {
-                //println!("Ping!");
-                match connection.0.write_all(ping.byte_data()) {
-                    Err(e) => {
-                        println!("Unable to ping :(. Reconnecting... Error: {}", e);
-                        connection.1 = UdpSocket::bind("127.0.0.1:12345").unwrap();
-                        connection = connect();
-                    }
-                    Ok(_) => {
-                        match connection.0.read_u8() {
-                            Ok(val) => {
-                                if val == Protocol::TcpCommandPong.into() {
-                                    //println!("Pong!")
-                                } else {
-                                    connection.1 = UdpSocket::bind("127.0.0.1:12345").unwrap();
-                                    connection = connect();
-                                }
-                            },
-                            Err(_) => {
-                                connection.1 = UdpSocket::bind("127.0.0.1:12345").unwrap();
-                                connection = connect();
+    let network_thread = thread::spawn({
+        let should_shutdown = should_shutdown.clone();
+        move || {
+            let connect = || {
+                loop {
+                    match network::connect("192.168.15.15", controller_handle) {
+                        network::ConnectResult::Bad => {
+                            println!("Unable to connect :(, trying again in 2 seconds.");
+                            if should_shutdown.load(Ordering::Relaxed) {
+                                return None;
                             }
+                            thread::sleep(Duration::from_secs(2));
+                        },
+                        network::ConnectResult::Good(stream) => {
+                            println!("Connected to the server!");
+                            return Some(stream);
                         }
+                    };
+                }
+            };
+    
+            let mut connection_optional = connect();
+            let timeout = Duration::from_secs(1);
+            let ping_interval = Duration::from_secs(1);
+            let ping = PingCommand::new();
+            let mut last_ping = Instant::now();
+            loop {
+    
+                if should_shutdown.load(Ordering::Relaxed) {
+                    if let Some(connection) = &mut connection_optional {
+                        network::close(&mut connection.0);
                     }
-                };
-                last_ping = Instant::now();
-            }
-
-            if shutdown_receiver.try_recv().is_ok() {
-                network::close(&mut connection.0);
-                return;
+                    return;
+                }
+    
+                match &mut connection_optional {
+                    Some(connection) => {
+                        if let Ok(val) = command_receiver.recv_timeout(timeout) {
+                            match val {
+                                Message::Terminate => return,
+                                Message::UdpData(data) => {
+                                    if let Err(e) = connection.1.send(data.byte_data()) {
+                                        println!("Unable to send UDP data :(. Dropping and reconnecting. Error: {}", e);
+                                        connection_optional = None;
+                                        continue;
+                                    }
+                                }
+                                Message::TcpData(data) => {
+                                    if let Err(e) = connection.0.write_all(data.byte_data()) {
+                                        println!("Unable to send TCP data :(. Dropping and reconnecting. Error: {}", e);
+                                        connection_optional = None;
+                                        continue;
+                                    }
+                                }
+                            };
+                        }
+            
+                        // move the ping to another thread for lower latency
+                        if last_ping.elapsed() > ping_interval { // try to change to +
+                            //println!("Ping!");
+                            match connection.0.write_all(ping.byte_data()) {
+                                Err(e) => {
+                                    println!("Unable to ping :(. Reconnecting... Error: {}", e);
+                                    connection_optional = None;
+                                    continue;
+                                }
+                                Ok(_) => {
+                                    match connection.0.read_u8() {
+                                        Ok(val) => {
+                                            if val == Protocol::TcpCommandPong.into() {
+                                                //println!("Pong!")
+                                            } else {
+                                                connection_optional = None;
+                                                continue;
+                                            }
+                                        },
+                                        Err(_) => {
+                                            connection_optional = None;
+                                            continue;
+                                        }
+                                    }
+                                }
+                            };
+                            last_ping = Instant::now();
+                        }
+                    },
+                    None => {
+                        connection_optional = connect();
+                    }
+                }
             }
         }
     });
@@ -97,9 +125,7 @@ fn main() {
 
     go::go(command_sender);
 
-    let _ = shutdown_sender.send(());
+    should_shutdown.store(true, Ordering::Relaxed);
     let _ = network_thread.join();
-    //ff::ff();
     //ff_simple::ff_simple();
 }
-

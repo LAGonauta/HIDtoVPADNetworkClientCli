@@ -242,3 +242,9 @@ impl Into<u8> for Protocol {
         self as u8
     }
 }
+
+pub enum Message {
+    Terminate,
+    TcpData(Box<dyn Command>),
+    UdpData(Box<dyn Command>)
+}
