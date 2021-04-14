@@ -2,7 +2,21 @@ use std::slice::Iter;
 
 use bytebuffer::ByteBuffer;
 use gilrs::{Axis, Button, Gamepad, Gilrs};
+use gilrs::EventType::{ButtonChanged, AxisChanged};
 
+struct BinaryPrint(Vec<u8>);
+
+impl std::fmt::Binary for BinaryPrint {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        for (count, n) in self.0.iter().enumerate() {
+            if count != 0 {
+                write!(f, " ")?;
+            }
+            write!(f, "{:#010b}", n)?;
+        }
+        Ok(())
+    }
+}
 
 pub struct ControllerManager {}
 
@@ -12,7 +26,13 @@ impl ControllerManager {
     }
 
     pub fn prepare(gilrs: &mut Gilrs) {
-        while let Some(_) = gilrs.next_event() {}
+        while let Some(a) = gilrs.next_event() {
+            // match a.event {
+            //     gilrs::EventType::AxisChanged(val, _, _) => println!("Axis: {:?}", val),
+            //     gilrs::EventType::ButtonChanged(val,_,_) => println!("Button: {:?}", val),
+            //     _ => {}
+            // }
+        }
     }
 
     pub fn poll(&self, gamepad: &Gamepad) -> Vec<u8> {
@@ -23,6 +43,8 @@ impl ControllerManager {
 
         data.write_i32(stick_state);
         data.write_i32(buttons_state);
+
+        //print!("Final state: = {:b} \r", BinaryPrint(data.to_bytes()));
 
         data.to_bytes()
     }
@@ -42,7 +64,7 @@ impl ControllerManager {
             .map(|axis| ControllerManager::map_axis_data(axis.1.value(), axis.0))
             .fold(0, |accumulated, element| accumulated | element);
 
-        let trigger_state =
+        let mut trigger_state =
         ControllerManager::triggers_iterator()
             .map(|&trigger| (trigger, gamepad.axis_data(trigger)))
             .filter(|trigger| trigger.1.is_some())
@@ -50,9 +72,14 @@ impl ControllerManager {
             .map(|trigger| ControllerManager::map_trigger_data(trigger.1.value(), trigger.0))
             .fold(0, |accumulated, element| accumulated | element);
 
+        trigger_state = ControllerManager::triggers_buttons_iterator()
+            .filter(|&&button| gamepad.is_pressed(button))
+            .map(|&button| ControllerManager::map_trigger_button_data(button))
+            .fold(trigger_state, |accumulated, element| accumulated | element);
+
         buttons_state = buttons_state | self.overflow(trigger_state as i32);
 
-        //print!("Stick: {:#034b}. Triggers: {:#018b}. Buttons state: {:#08}.     \r", stick_state, trigger_state, buttons_state);
+        //print!("Stick: {:#034b}. Triggers: {:#018b}. Buttons state: {:#010}.     \r", stick_state, trigger_state, buttons_state);
 
         (buttons_state, stick_state)
     }
@@ -90,6 +117,14 @@ impl ControllerManager {
             Axis::LeftZ, Axis::RightZ
         ];
         return TRIGGERS.iter();
+    }
+
+    fn triggers_buttons_iterator() -> Iter<'static, Button> {
+        static TRIGGER: [Button; 2] =
+        [
+            Button::LeftTrigger2, Button::RightTrigger2
+        ];
+        return TRIGGER.iter();
     }
 
     fn map_button_state(button: Button) -> i32 {
@@ -142,6 +177,14 @@ impl ControllerManager {
         match trigger {
             Axis::LeftZ => result << 8,
             Axis::RightZ => result << 0,
+            _ => 0
+        }
+    }
+
+    fn map_trigger_button_data(trigger_button: Button) -> i16 {
+        match trigger_button {
+            Button::LeftTrigger2 => 127 << 8,
+            Button::RightTrigger2 => 127 << 0,
             _ => 0
         }
     }
