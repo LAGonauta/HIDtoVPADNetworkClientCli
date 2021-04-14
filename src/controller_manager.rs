@@ -183,8 +183,8 @@ impl ControllerManager {
 
     fn map_trigger_button_data(trigger_button: Button) -> i16 {
         match trigger_button {
-            Button::LeftTrigger2 => 127 << 8,
-            Button::RightTrigger2 => 127 << 0,
+            Button::LeftTrigger2 => 128 << 8,
+            Button::RightTrigger2 => 128 << 0,
             _ => 0
         }
     }
