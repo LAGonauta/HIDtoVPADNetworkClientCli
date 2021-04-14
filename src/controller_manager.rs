@@ -96,8 +96,8 @@ impl ControllerManager {
         match button {
             Button::South => 1 << 0,
             Button::East => 1 << 1,
-            Button::North => 1 << 2,
-            Button::West => 1 << 3,
+            Button::West => 1 << 2,
+            Button::North => 1 << 3,
     
             Button::DPadLeft => 1 << 4,
             Button::DPadUp => 1 << 5,
