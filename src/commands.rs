@@ -1,6 +1,7 @@
 use std::io::Write;
 
 use bytebuffer::ByteBuffer;
+use flume::Sender;
 
 use crate::network::Protocol;
 
@@ -130,4 +131,14 @@ impl Command for PingCommand {
     fn byte_data(&self) -> &Vec<u8> {
         &self.data
     }
+}
+
+pub struct AttachData {
+    pub handle: i32,
+    pub response: Sender<Option<AttachResponse>>
+}
+
+pub struct AttachResponse {
+    pub device_slot: i16,
+    pub pad_slot: i8
 }

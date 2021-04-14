@@ -3,34 +3,48 @@ use std::{sync::{Arc, atomic::{AtomicBool, Ordering}}, thread, time::Duration};
 use flume::{Receiver, Sender};
 use gilrs::{GamepadId, Gilrs};
 
-use crate::{commands::WriteCommand, controller_manager::ControllerManager, handle_factory::HandleFactory, network::Message};
+use crate::{commands::{WriteCommand, AttachData}, controller_manager::ControllerManager, handle_factory::HandleFactory, network::Message};
 
-pub fn go(sender: Sender<Message>, controller_receiver: Receiver<(i32, i16, i8)>, should_shutdown: Arc<AtomicBool>) {
+pub fn go(sender: Sender<Message>, reconection_notifier: Receiver<()>, should_shutdown: Arc<AtomicBool>) {
     let mut gilrs = Gilrs::new().unwrap();
 
     // Iterate over all connected gamepads and attach them
     let mut handle_factory = HandleFactory::new();
     let mut controllers = Vec::new();
     let (s, r) = flume::bounded(0);
-    for (id, gamepad) in gilrs.gamepads() {
-        let handle = handle_factory.next();
-        match sender.send(Message::Attach((handle, s.clone()))) {
+    let attach = |handle: i32, gamepad_id: GamepadId| -> Option<Controller> {
+        match sender.send(Message::Attach(AttachData { handle, response: s.clone() })) {
             Ok(_) => {
                 match r.recv() {
                     Ok(val) => {
-                        if val.0 < 0 || val.1 < 0 {
-                            println!("Unable to attach controller, invalid slots.")
-                        } else {
-                            controllers.push(Controller { id: id, handle: handle, device_slot: val.0, pad_slot: val.1 });
-                            println!("{} is {:?}. Attached!", gamepad.name(), gamepad.power_info());
+                        match val {
+                            Some(val) => {
+                                if val.device_slot < 0 || val.pad_slot < 0 {
+                                    println!("Unable to attach controller, invalid slots.")
+                                } else {
+                                    return Some(Controller { id: gamepad_id, handle: handle, device_slot: val.device_slot, pad_slot: val.pad_slot });
+                                }
+                            },
+                            None => println!("Unable to attach controller, no response received.")
                         }
                     }
                     Err(e) => println!("Unable to attach controller, error on receive.")
                 };
             },
             Err(e) => println!("Unable to attach controller, error on send.")
-        }
+        };
+        return None;
+    };
 
+    for (id, gamepad) in gilrs.gamepads() {
+        let handle = handle_factory.next();
+        match attach(handle, id) {
+            Some(controller) => {
+                println!("{} is {:?}. Attached!", gamepad.name(), gamepad.power_info());
+                controllers.push(controller);
+            },
+            None => println!("{} is {:?}. Unable to attach...", gamepad.name(), gamepad.power_info())
+        }
     }
 
     let controller_manager = ControllerManager::new();
@@ -40,15 +54,22 @@ pub fn go(sender: Sender<Message>, controller_receiver: Receiver<(i32, i16, i8)>
             return;
         }
 
-        while let Ok(val) = controller_receiver.try_recv() {
-            if let Some(controller) = controllers.iter_mut().find(|e| e.handle == val.0) {
-                controller.pad_slot = val.2;
-                controller.device_slot = val.1;
+        if reconection_notifier.try_recv().is_ok() {
+            for controller in &mut controllers {
+                match attach(controller.handle, controller.id) {
+                    Some(new_data) => {
+                        controller.pad_slot = new_data.pad_slot;
+                        controller.device_slot = new_data.device_slot;
+                        //println!("{} is {:?}. Attached!", gamepad.name(), gamepad.power_info());
+                    },
+                    None => {}//println!("{} is {:?}. Unable to attach...", gamepad.name(), gamepad.power_info())
+                }
             }
         }
 
         for controller in &controllers {
             ControllerManager::prepare(&mut gilrs);
+            // check if any controller changed and send attach/detach events. The network manager should ask again for all controllers on reconnection
             let gamepad = gilrs.gamepad(controller.id);
 
             let write_command =

@@ -3,11 +3,12 @@ use std::io::Write;
 use byteorder::{NetworkEndian, ReadBytesExt, WriteBytesExt};
 use flume::{Receiver, Sender};
 
-use crate::commands::{AttachCommand, Command, PingCommand};
+use crate::commands::{AttachCommand, AttachData, AttachResponse, Command, PingCommand};
 
 static PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion::Version3;
 
-pub fn start_thread(ip: &str, command_receiver: Receiver<Message>, controller_sender: Sender<(i32, i16, i8)>, should_shutdown: Arc<AtomicBool>) -> JoinHandle<()> {
+// change reconnection sender to an enum: Disconnected, Reconnected
+pub fn start_thread(ip: &str, command_receiver: Receiver<Message>, reconnection_sender: Sender<()>, should_shutdown: Arc<AtomicBool>) -> JoinHandle<()> {
     let ip_copy = ip.to_owned();
 
     thread::spawn({
@@ -35,7 +36,6 @@ pub fn start_thread(ip: &str, command_receiver: Receiver<Message>, controller_se
             let ping_interval = Duration::from_secs(1);
             let ping = PingCommand::new();
             let mut last_ping = Instant::now();
-            let mut attached = Vec::new();
             loop {
     
                 if should_shutdown.load(Ordering::Relaxed) {
@@ -65,17 +65,7 @@ pub fn start_thread(ip: &str, command_receiver: Receiver<Message>, controller_se
                                     }
                                 }
                                 Message::Attach(val) => {
-                                    match attach_controller(val.0, &mut connection.tcp) {
-                                        Some(result) => {
-                                            if let Ok(_) = val.1.send(result) {
-                                                attached.push((val.0, result.0, result.1));
-                                            }
-                                            
-                                        }
-                                        None => {
-                                            let _ = val.1.send((-1, -1));
-                                        }
-                                    }
+                                    let _r = val.response.send(attach_controller(val.handle, &mut connection.tcp));
                                 }
                             };
                         }
@@ -112,19 +102,7 @@ pub fn start_thread(ip: &str, command_receiver: Receiver<Message>, controller_se
                     },
                     None => {
                         connection_optional = connect();
-                        if let Some(connection) = &mut connection_optional {
-                            for controller in &attached {
-                                match attach_controller(controller.0, &mut connection.tcp) {
-                                    Some(val) => {
-                                        if val.0 != controller.1 || val.1 != controller.2 {
-                                            println!("Device_slot and pad_slot are different, updating.");
-                                            let _ = controller_sender.send((controller.0, val.0, val.1));
-                                        }
-                                    },
-                                    None => { println!("Unable to reattach controller, handle: {}", controller.0); }
-                                }
-                            }
-                        }
+                        let _r = reconnection_sender.send(());
                     }
                 }
             }
@@ -185,7 +163,7 @@ fn udp_connect(ip: &str) -> Option<UdpSocket> {
     return Some(socket);
 }
 
-fn attach_controller(controller_handle: i32, stream: &mut TcpStream) -> Option<(i16, i8)> {
+fn attach_controller(controller_handle: i32, stream: &mut TcpStream) -> Option<AttachResponse> {
     let command = AttachCommand::new(controller_handle, 0x7331, 0x1337, 1);
     send_attach(&command, stream)
 }
@@ -228,7 +206,7 @@ fn handshake(stream: &mut TcpStream) -> HandshakeResult {
     return HandshakeResult::Good;
 }
 
-fn send_attach(command: &AttachCommand, stream: &mut TcpStream) -> Option<(i16, i8)> {
+fn send_attach(command: &AttachCommand, stream: &mut TcpStream) -> Option<AttachResponse> {
     match stream.write_all(command.byte_data()) {
         Ok(_) => {}
         Err(_) => return None
@@ -279,7 +257,7 @@ fn send_attach(command: &AttachCommand, stream: &mut TcpStream) -> Option<(i16, 
         return None;
     }
 
-    return Some((device_slot, padslot));
+    return Some(AttachResponse { device_slot, pad_slot: padslot });
 }
 
 fn close(stream: &mut TcpStream) {
@@ -367,7 +345,7 @@ pub enum Message {
     Terminate,
     TcpData(Box<dyn Command>),
     UdpData(Box<dyn Command>),
-    Attach((i32, Sender<(i16, i8)>))
+    Attach(AttachData)
 }
 
 pub struct Connection {
