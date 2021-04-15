@@ -1,11 +1,16 @@
 use std::{sync::{Arc, atomic::{AtomicBool, Ordering}}, thread, time::Duration};
 
 use flume::{Receiver, Sender};
-use gilrs::{GamepadId, Gilrs};
+use gilrs::{GamepadId, Gilrs, ff::{BaseEffect, BaseEffectType, EffectBuilder, Replay, Ticks}};
 
-use crate::{commands::{WriteCommand, AttachData}, controller_manager::ControllerManager, handle_factory::HandleFactory, network::Message};
+use crate::{commands::{AttachData, Rumble, WriteCommand}, controller_manager::ControllerManager, handle_factory::HandleFactory, network::Message};
 
-pub fn go(sender: Sender<Message>, reconection_notifier: Receiver<()>, should_shutdown: Arc<AtomicBool>) {
+pub fn go(
+    sender: Sender<Message>,
+    reconection_notifier: Receiver<()>,
+    rumble_receiver: Receiver<Rumble>,
+    should_shutdown: Arc<AtomicBool>
+) {
     let mut gilrs = Gilrs::new().unwrap();
 
     // Iterate over all connected gamepads and attach them
@@ -47,11 +52,31 @@ pub fn go(sender: Sender<Message>, reconection_notifier: Receiver<()>, should_sh
         }
     }
 
+    let effect = EffectBuilder::new()
+        // .add_effect(BaseEffect {
+        //     kind: BaseEffectType::Strong { magnitude: 10_000 },
+        //     ..Default::default()
+        // })
+        .add_effect(BaseEffect {
+            kind: BaseEffectType::Weak { magnitude: 20_000 },
+            ..Default::default()
+        })
+        .gamepads(&controllers.iter().map(|c| c.id).collect::<Vec<_>>())
+        .finish(&mut gilrs)
+        .unwrap();
+
     let controller_manager = ControllerManager::new();
     let loop_sleep_duration = Duration::from_millis(10);
     loop {
         if should_shutdown.load(Ordering::Relaxed) {
             return;
+        }
+
+        if let Ok(rumble) = rumble_receiver.try_recv() {
+            match rumble {
+                Rumble::Start(_handle) => effect.play(),
+                Rumble::Stop(_handle) => effect.stop()
+            };
         }
 
         if reconection_notifier.try_recv().is_ok() {

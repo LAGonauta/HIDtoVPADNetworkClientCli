@@ -1,14 +1,21 @@
 use std::{net::{SocketAddr, TcpStream, UdpSocket}, sync::{Arc, atomic::AtomicBool, atomic::Ordering}, thread::{self, JoinHandle}, time::{Duration, Instant}};
 use std::io::Write;
+use bytebuffer::ByteBuffer;
 use byteorder::{NetworkEndian, ReadBytesExt, WriteBytesExt};
 use flume::{Receiver, Sender};
 
-use crate::commands::{AttachCommand, AttachData, AttachResponse, Command, PingCommand};
+use crate::commands::{AttachCommand, AttachData, AttachResponse, Command, PingCommand, Rumble};
 
 static PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion::Version3;
 
 // change reconnection sender to an enum: Disconnected, Reconnected
-pub fn start_thread(ip: &str, command_receiver: Receiver<Message>, reconnection_sender: Sender<()>, should_shutdown: Arc<AtomicBool>) -> JoinHandle<()> {
+pub fn start_thread(
+    ip: &str,
+    command_receiver: Receiver<Message>,
+    reconnection_sender: Sender<()>,
+    rumble_sender: Sender<Rumble>,
+    should_shutdown: Arc<AtomicBool>
+) -> JoinHandle<()> {
     let ip_copy = ip.to_owned();
 
     thread::spawn({
@@ -31,41 +38,64 @@ pub fn start_thread(ip: &str, command_receiver: Receiver<Message>, reconnection_
                 }
             };
     
-            let mut connection_optional = connect();
+            let mut connection = connect();
             let timeout = Duration::from_secs(1);
             let ping_interval = Duration::from_secs(1);
             let ping = PingCommand::new();
             let mut last_ping = Instant::now();
+            let mut udp_buffer = [0; 1400];
+            let wiiu_udp_addr: SocketAddr = format!("{}:{}", ip_copy, BaseProtocol::UdpPort as i16).parse().unwrap();
             loop {
     
                 if should_shutdown.load(Ordering::Relaxed) {
-                    if let Some(connection) = &mut connection_optional {
+                    if let Some(connection) = &mut connection {
                         close(&mut connection.tcp);
                     }
                     return;
                 }
     
-                match &mut connection_optional {
-                    Some(connection) => {
+                match &mut connection {
+                    Some(connection_handle) => {
+
+                        match connection_handle.udp.recv_from(&mut udp_buffer) {
+                            Ok((count, _)) => {
+                                if count >= 6 {
+                                    let mut data = ByteBuffer::from_bytes(&udp_buffer);
+    
+                                    if data.read_u8() == UdpProtocol::UdpCommandRumble.into() {
+                                        let handle = data.read_i32();
+                                        if data.read_u8() == UdpProtocol::UdpCommandRumble.into() {
+                                            let _ = rumble_sender.send(Rumble::Start(handle));
+                                        } else {
+                                            let _ = rumble_sender.send(Rumble::Stop(handle));
+                                        }
+                                    }
+        
+                                    udp_buffer.fill(0);
+                                }
+                            }
+                            Err(_e) => {}
+                        }
+
                         if let Ok(val) = command_receiver.recv_timeout(timeout) {
                             match val {
                                 Message::Terminate => return,
                                 Message::UdpData(data) => {
-                                    if let Err(e) = connection.udp.send(data.byte_data()) {
+                                    if let Err(e) = connection_handle.udp.send_to(data.byte_data(), wiiu_udp_addr) {
                                         println!("Unable to send UDP data :(. Dropping and reconnecting. Error: {}", e);
-                                        connection_optional = None;
+                                        connection = None;
                                         continue;
                                     }
                                 }
                                 Message::TcpData(data) => {
-                                    if let Err(e) = connection.tcp.write_all(data.byte_data()) {
+                                    if let Err(e) = connection_handle.tcp.write_all(data.byte_data()) {
                                         println!("Unable to send TCP data :(. Dropping and reconnecting. Error: {}", e);
-                                        connection_optional = None;
+                                        connection = None;
                                         continue;
                                     }
                                 }
                                 Message::Attach(val) => {
-                                    let _r = val.response.send(attach_controller(val.handle, &mut connection.tcp));
+                                    let _r = val.response.send(attach_controller(val.handle, &mut connection_handle.tcp));
                                 }
                             };
                         }
@@ -74,24 +104,24 @@ pub fn start_thread(ip: &str, command_receiver: Receiver<Message>, reconnection_
                         let now = Instant::now();
                         if now > last_ping + ping_interval {
                             //println!("Ping!");
-                            match connection.tcp.write_all(ping.byte_data()) {
+                            match connection_handle.tcp.write_all(ping.byte_data()) {
                                 Err(e) => {
                                     println!("Unable to ping :(. Reconnecting... Error: {}", e);
-                                    connection_optional = None;
+                                    connection = None;
                                     continue;
                                 }
                                 Ok(_) => {
-                                    match connection.tcp.read_u8() {
+                                    match connection_handle.tcp.read_u8() {
                                         Ok(val) => {
-                                            if val == Protocol::TcpCommandPong.into() {
+                                            if val == TcpProtocol::TcpCommandPong.into() {
                                                 //println!("Pong!")
                                             } else {
-                                                connection_optional = None;
+                                                connection = None;
                                                 continue;
                                             }
                                         },
                                         Err(_) => {
-                                            connection_optional = None;
+                                            connection = None;
                                             continue;
                                         }
                                     }
@@ -101,7 +131,7 @@ pub fn start_thread(ip: &str, command_receiver: Receiver<Message>, reconnection_
                         }
                     },
                     None => {
-                        connection_optional = connect();
+                        connection = connect();
                         let _r = reconnection_sender.send(());
                     }
                 }
@@ -111,7 +141,7 @@ pub fn start_thread(ip: &str, command_receiver: Receiver<Message>, reconnection_
 }
 
 fn connect(ip: &str) -> ConnectResult {
-    let addr: SocketAddr = format!("{}:{}", ip, Protocol::TcpPort as i16)
+    let addr: SocketAddr = format!("{}:{}", ip, BaseProtocol::TcpPort as i16)
         .parse().expect("Unable to parse socket address");
     let tcp_stream = match TcpStream::connect_timeout(&addr, Duration::from_secs(2)) {
         Ok(mut stream) => {
@@ -143,7 +173,7 @@ fn connect(ip: &str) -> ConnectResult {
 }
 
 fn udp_connect(ip: &str) -> Option<UdpSocket> {
-    let socket = match UdpSocket::bind(format!("0.0.0.0:{}", Protocol::UdpClientPort as i16)) {
+    let socket = match UdpSocket::bind(format!("0.0.0.0:{}", BaseProtocol::UdpServerPort as i16)) {
         Ok(val) => val,
         Err(e) => {
             println!("Unable to bind UDP: {}", e);
@@ -151,14 +181,7 @@ fn udp_connect(ip: &str) -> Option<UdpSocket> {
         }
     };
 
-    let addr = format!("{}:{}", ip, Protocol::UdpPort as i16);
-    match socket.connect(addr) {
-        Ok(_) => {},
-        Err(e) => {
-            println!("Unable to connect UDP: {}", e);
-            return None
-        }
-    }
+    let _ = socket.set_nonblocking(true);
 
     return Some(socket);
 }
@@ -219,9 +242,9 @@ fn send_attach(command: &AttachCommand, stream: &mut TcpStream) -> Option<Attach
     if config_found == 0 {
         println!("Failed to get byte.");
         return None;
-    } else if config_found == Protocol::TcpCommandAttachConfigNotFound.into() {
+    } else if config_found == TcpProtocol::TcpCommandAttachConfigNotFound.into() {
         println!("No config found for this device.");
-    } else if config_found == Protocol::TcpCommandAttachConfigFound.into() {
+    } else if config_found == TcpProtocol::TcpCommandAttachConfigFound.into() {
         println!("Config found for this device.");
     } else {
         println!("Should not get this far :(");
@@ -234,9 +257,9 @@ fn send_attach(command: &AttachCommand, stream: &mut TcpStream) -> Option<Attach
     if user_data_okay == 0 {
         println!("Failed to get byte.");
         return None;
-    } else if user_data_okay == Protocol::TcpCommandAttachUserdataBad.into() {
+    } else if user_data_okay == TcpProtocol::TcpCommandAttachUserdataBad.into() {
         println!("Bad user data.");
-    } else if user_data_okay == Protocol::TcpCommandAttachUserdataOkay.into() {
+    } else if user_data_okay == TcpProtocol::TcpCommandAttachUserdataOkay.into() {
         println!("User data OK.");
     } else {
         println!("Should not get this far :(");
@@ -309,13 +332,27 @@ impl From<u8> for ProtocolVersion {
 }
 
 #[derive(Copy, Clone)]
-pub enum Protocol {
+pub enum BaseProtocol {
     Version = ProtocolVersion::Version3 as isize,
 
     TcpPort = 8112,
     UdpPort = 8113,
-    UdpClientPort = 8114,
+    UdpServerPort = 8114,
+}
 
+impl Into<u16> for BaseProtocol {
+    fn into(self) -> u16 {
+        self as u16
+    }
+}
+
+impl Into<u8> for BaseProtocol {
+    fn into(self) -> u8 {
+        self as u8
+    }
+}
+
+pub enum TcpProtocol {
     TcpCommandAttach = 0x01,
     TcpCommandDetach = 0x02,
     TcpCommandPing = 0xF0,
@@ -324,18 +361,33 @@ pub enum Protocol {
     TcpCommandAttachConfigFound = 0xE0,
     TcpCommandAttachConfigNotFound = 0xE1,
     TcpCommandAttachUserdataOkay = 0xE8,
-    TcpCommandAttachUserdataBad = 0xE9,
-
-    UdpCommandData = 0x03
+    TcpCommandAttachUserdataBad = 0xE9
 }
 
-impl Into<u16> for Protocol {
+impl Into<u16> for TcpProtocol {
     fn into(self) -> u16 {
         self as u16
     }
 }
 
-impl Into<u8> for Protocol {
+impl Into<u8> for TcpProtocol {
+    fn into(self) -> u8 {
+        self as u8
+    }
+}
+
+pub enum UdpProtocol {
+    UdpCommandData = 0x03,
+    UdpCommandRumble = 0x01
+}
+
+impl Into<u16> for UdpProtocol {
+    fn into(self) -> u16 {
+        self as u16
+    }
+}
+
+impl Into<u8> for UdpProtocol {
     fn into(self) -> u8 {
         self as u8
     }

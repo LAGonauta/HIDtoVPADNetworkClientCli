@@ -3,7 +3,7 @@ use std::io::Write;
 use bytebuffer::ByteBuffer;
 use flume::Sender;
 
-use crate::network::Protocol;
+use crate::network::{BaseProtocol, TcpProtocol, UdpProtocol};
 
 pub trait Command : Send {
     fn data(&self) -> String;
@@ -21,7 +21,7 @@ pub struct AttachCommand {
 impl AttachCommand {
     pub fn new(handle: i32, vid: i16, pid: i16, sender: i32) -> AttachCommand {
         let mut buffer = ByteBuffer::new();
-        buffer.write_u8(Protocol::TcpCommandAttach.into());
+        buffer.write_u8(TcpProtocol::TcpCommandAttach.into());
         buffer.write_i32(handle);
         buffer.write_i16(vid);
         buffer.write_i16(pid);
@@ -55,7 +55,7 @@ pub struct DetachCommand {
 impl DetachCommand {
     pub fn new(handle: i32, sender: i32) -> DetachCommand {
         let mut buffer = ByteBuffer::new();
-        buffer.write_u8(Protocol::TcpCommandDetach.into());
+        buffer.write_u8(TcpProtocol::TcpCommandDetach.into());
         buffer.write_i32(handle);
 
         DetachCommand {
@@ -85,7 +85,7 @@ pub struct WriteCommand {
 impl WriteCommand {
     pub fn new(handle: i32, device_slot: i16, pad_slot: i8, sender: i32, data: Vec<u8>) -> WriteCommand {
         let mut buffer = ByteBuffer::new();
-        buffer.write_u8(Protocol::UdpCommandData.into());
+        buffer.write_u8(UdpProtocol::UdpCommandData.into());
         buffer.write_u8(0x01); // single command, will need to change that for batch
         buffer.write_i32(handle);
         buffer.write_i16(device_slot);
@@ -118,7 +118,7 @@ pub struct PingCommand {
 impl PingCommand {
     pub fn new() -> PingCommand {
         PingCommand {
-            data: vec![Protocol::TcpCommandPing.into()]
+            data: vec![TcpProtocol::TcpCommandPing.into()]
         }
     }
 }
@@ -141,4 +141,9 @@ pub struct AttachData {
 pub struct AttachResponse {
     pub device_slot: i16,
     pub pad_slot: i8
+}
+
+pub enum Rumble {
+    Start(i32),
+    Stop(i32)
 }
