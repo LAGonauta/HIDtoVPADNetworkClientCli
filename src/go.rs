@@ -1,7 +1,7 @@
 use std::{sync::{Arc, atomic::{AtomicBool, Ordering}}, thread, time::Duration};
 
 use flume::{Receiver, Sender};
-use gilrs::{GamepadId, Gilrs, ff::{BaseEffect, BaseEffectType, EffectBuilder, Replay, Ticks}};
+use gilrs::{GamepadId, Gilrs, ff::{BaseEffect, BaseEffectType, EffectBuilder}};
 
 use crate::{commands::{AttachData, Rumble, WriteCommand}, controller_manager::ControllerManager, handle_factory::HandleFactory, network::Message};
 
@@ -33,10 +33,10 @@ pub fn go(
                             None => println!("Unable to attach controller, no response received.")
                         }
                     }
-                    Err(e) => println!("Unable to attach controller, error on receive.")
+                    Err(e) => println!("Unable to attach controller, error on receive: {}", e)
                 };
             },
-            Err(e) => println!("Unable to attach controller, error on send.")
+            Err(e) => println!("Unable to attach controller, error on send: {}", e)
         };
         return None;
     };

@@ -3,7 +3,7 @@ use std::io::Write;
 use bytebuffer::ByteBuffer;
 use flume::Sender;
 
-use crate::network::{BaseProtocol, TcpProtocol, UdpProtocol};
+use crate::network::{TcpProtocol, UdpProtocol};
 
 pub trait Command : Send {
     fn data(&self) -> String;

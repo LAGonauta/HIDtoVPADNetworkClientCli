@@ -4,7 +4,6 @@ use commands::Rumble;
 use flume::{Sender, Receiver};
 use network::Message;
 
-//mod ff_simple;
 mod go;
 mod network;
 mod commands;
@@ -25,9 +24,17 @@ fn main() {
 
     // 3. send data
 
-    go::go(command_sender, reconection_notifier_receiver, rumble_receiver, should_shutdown.clone());
+    let go_thread = std::thread::spawn({
+        let should_shutdown = should_shutdown.clone();
+        move || {
+            go::go(command_sender, reconection_notifier_receiver, rumble_receiver, should_shutdown);
+        }
+    });
+
+    println!("Press enter to exit...");
+    let _ = std::io::stdin().read_line(&mut String::new());
 
     should_shutdown.store(true, Ordering::Relaxed);
     let _ = network_thread.join();
-    //ff_simple::ff_simple();
+    let _ = go_thread.join();
 }

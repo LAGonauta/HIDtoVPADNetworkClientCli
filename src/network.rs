@@ -6,8 +6,6 @@ use flume::{Receiver, Sender};
 
 use crate::commands::{AttachCommand, AttachData, AttachResponse, Command, PingCommand, Rumble};
 
-static PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion::Version3;
-
 // change reconnection sender to an enum: Disconnected, Reconnected
 pub fn start_thread(
     ip: &str,
@@ -164,7 +162,7 @@ fn connect(ip: &str) -> ConnectResult {
         }
     };
 
-    let udp_stream = match udp_connect(ip) {
+    let udp_stream = match udp_bind() {
         Some(val) => val,
         None => return ConnectResult::Bad
     };
@@ -172,7 +170,7 @@ fn connect(ip: &str) -> ConnectResult {
     ConnectResult::Good(Connection { tcp: tcp_stream, udp: udp_stream })
 }
 
-fn udp_connect(ip: &str) -> Option<UdpSocket> {
+fn udp_bind() -> Option<UdpSocket> {
     let socket = match UdpSocket::bind(format!("0.0.0.0:{}", BaseProtocol::UdpServerPort as i16)) {
         Ok(val) => val,
         Err(e) => {
@@ -333,7 +331,7 @@ impl From<u8> for ProtocolVersion {
 
 #[derive(Copy, Clone)]
 pub enum BaseProtocol {
-    Version = ProtocolVersion::Version3 as isize,
+    //Version = ProtocolVersion::Version3 as isize,
 
     TcpPort = 8112,
     UdpPort = 8113,

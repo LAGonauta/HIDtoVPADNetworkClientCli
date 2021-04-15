@@ -2,7 +2,6 @@ use std::slice::Iter;
 
 use bytebuffer::ByteBuffer;
 use gilrs::{Axis, Button, Gamepad, Gilrs};
-use gilrs::EventType::{ButtonChanged, AxisChanged};
 
 struct BinaryPrint(Vec<u8>);
 
@@ -26,8 +25,8 @@ impl ControllerManager {
     }
 
     pub fn prepare(gilrs: &mut Gilrs) {
-        while let Some(a) = gilrs.next_event() {
-            // match a.event {
+        while let Some(_event) = gilrs.next_event() {
+            // match _event.event {
             //     gilrs::EventType::AxisChanged(val, _, _) => println!("Axis: {:?}", val),
             //     gilrs::EventType::ButtonChanged(val,_,_) => println!("Button: {:?}", val),
             //     _ => {}
