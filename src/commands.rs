@@ -3,7 +3,7 @@ use std::io::Write;
 use bytebuffer::ByteBuffer;
 use flume::Sender;
 
-use crate::network::{TcpProtocol, UdpProtocol};
+use crate::{go::Controller, network::{TcpProtocol, UdpProtocol}};
 
 pub trait Command : Send {
     fn data(&self) -> String;
@@ -77,24 +77,27 @@ impl Command for DetachCommand {
 }
 
 pub struct WriteCommand {
-    handle: i32,
     sender: i32,
     data: Vec<u8>
 }
 
 impl WriteCommand {
-    pub fn new(handle: i32, device_slot: i16, pad_slot: i8, sender: i32, data: Vec<u8>) -> WriteCommand {
+    pub fn new(controllers: &Vec<(&Controller, Vec<u8>)>, sender: i32) -> WriteCommand {
         let mut buffer = ByteBuffer::new();
         buffer.write_u8(UdpProtocol::UdpCommandData.into());
-        buffer.write_u8(0x01); // single command, will need to change that for batch
-        buffer.write_i32(handle);
-        buffer.write_i16(device_slot);
-        buffer.write_i8(pad_slot);
-        buffer.write_i8((data.len() & 0xFF) as i8);
-        buffer.write_all(&data).unwrap();
+        if controllers.len() > 0xFF {
+            println!("Too many controllers!");
+        }
+        buffer.write_u8(controllers.len() as u8);
+        for controller in controllers {
+            buffer.write_i32(controller.0.handle);
+            buffer.write_i16(controller.0.device_slot);
+            buffer.write_i8(controller.0.pad_slot);
+            buffer.write_i8((controller.1.len() & 0xFF) as i8);
+            buffer.write_all(&controller.1).unwrap();
+        }
 
         WriteCommand {
-            handle,
             sender,
             data: buffer.to_bytes()
         }
@@ -103,7 +106,7 @@ impl WriteCommand {
 
 impl Command for WriteCommand {
     fn data(&self) -> String {
-        format!("WriteCommand [handle={}, sender={}]", self.handle, self.sender)
+        format!("WriteCommand [sender={}]", self.sender)
     }
 
     fn byte_data(&self) -> &Vec<u8> {

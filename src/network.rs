@@ -1,4 +1,4 @@
-use std::{net::{SocketAddr, TcpStream, UdpSocket}, sync::{Arc, atomic::AtomicBool, atomic::Ordering}, thread::{self, JoinHandle}, time::{Duration, Instant}};
+use std::{net::{IpAddr, SocketAddr, TcpStream, UdpSocket}, sync::{Arc, atomic::AtomicBool, atomic::Ordering}, thread::{self, JoinHandle}, time::{Duration, Instant}};
 use std::io::Write;
 use bytebuffer::ByteBuffer;
 use byteorder::{NetworkEndian, ReadBytesExt, WriteBytesExt};
@@ -8,19 +8,17 @@ use crate::commands::{AttachCommand, AttachData, AttachResponse, Command, PingCo
 
 // change reconnection sender to an enum: Disconnected, Reconnected
 pub fn start_thread(
-    ip: &str,
+    wiiu_ip: IpAddr,
     command_receiver: Receiver<Message>,
     reconnection_sender: Sender<()>,
     rumble_sender: Sender<Rumble>,
     should_shutdown: Arc<AtomicBool>
 ) -> JoinHandle<()> {
-    let ip_copy = ip.to_owned();
-
     thread::spawn({
         move || {
             let connect = || {
                 loop {
-                    match connect(&ip_copy) {
+                    match connect(wiiu_ip) {
                         ConnectResult::Bad => {
                             println!("Unable to connect :(, trying again in 2 seconds.");
                             if should_shutdown.load(Ordering::Relaxed) {
@@ -42,7 +40,7 @@ pub fn start_thread(
             let ping = PingCommand::new();
             let mut last_ping = Instant::now();
             let mut udp_buffer = [0; 1400];
-            let wiiu_udp_addr: SocketAddr = format!("{}:{}", ip_copy, BaseProtocol::UdpPort as i16).parse().unwrap();
+            let wiiu_udp_addr = SocketAddr::new(wiiu_ip, BaseProtocol::UdpPort.into());
             loop {
     
                 if should_shutdown.load(Ordering::Relaxed) {
@@ -56,8 +54,8 @@ pub fn start_thread(
                     Some(connection_handle) => {
 
                         match connection_handle.udp.recv_from(&mut udp_buffer) {
-                            Ok((count, _)) => {
-                                if count >= 6 {
+                            Ok((count, addr)) => {
+                                if count >= 6 && addr.ip() == wiiu_ip {
                                     let mut data = ByteBuffer::from_bytes(&udp_buffer);
     
                                     if data.read_u8() == UdpProtocol::UdpCommandRumble.into() {
@@ -80,14 +78,14 @@ pub fn start_thread(
                                 Message::Terminate => return,
                                 Message::UdpData(data) => {
                                     if let Err(e) = connection_handle.udp.send_to(data.byte_data(), wiiu_udp_addr) {
-                                        println!("Unable to send UDP data :(. Dropping and reconnecting. Error: {}", e);
+                                        println!("Unable to send UDP data. Dropping and reconnecting. Error: {}", e);
                                         connection = None;
                                         continue;
                                     }
                                 }
                                 Message::TcpData(data) => {
                                     if let Err(e) = connection_handle.tcp.write_all(data.byte_data()) {
-                                        println!("Unable to send TCP data :(. Dropping and reconnecting. Error: {}", e);
+                                        println!("Unable to send TCP data. Dropping and reconnecting. Error: {}", e);
                                         connection = None;
                                         continue;
                                     }
@@ -141,6 +139,8 @@ pub fn start_thread(
 fn connect(ip: &str) -> ConnectResult {
     let addr: SocketAddr = format!("{}:{}", ip, BaseProtocol::TcpPort as i16)
         .parse().expect("Unable to parse socket address");
+fn connect(wiiu_ip: IpAddr) -> ConnectResult {
+    let addr: SocketAddr = SocketAddr::new(wiiu_ip, BaseProtocol::TcpPort.into());
     let tcp_stream = match TcpStream::connect_timeout(&addr, Duration::from_secs(2)) {
         Ok(mut stream) => {
             let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
