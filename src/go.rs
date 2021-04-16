@@ -81,12 +81,11 @@ pub fn go(
         Quota::per_second(NonZeroU32::new(polling_rate).unwrap()),
         &clock
     );
-    let jitter = Jitter::up_to(Duration::from_millis((1000 / polling_rate).into()));
     loop {
         match limiter.check() {
             Ok(_) => {},
             Err(e) => {
-                thread::sleep(jitter + e.wait_time_from(clock.now()));
+                thread::sleep(e.wait_time_from(clock.now()));
             }
         }
 
