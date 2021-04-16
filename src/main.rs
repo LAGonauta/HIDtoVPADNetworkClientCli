@@ -18,7 +18,7 @@ fn main() {
     let (rumble_sender, rumble_receiver): (Sender<Rumble>, Receiver<Rumble>) = flume::unbounded();
     let should_shutdown = Arc::new(AtomicBool::new(false));
     let addr: IpAddr = "192.168.15.15".parse().unwrap();
-    let polling_rate: u64 = 250; // Hz
+    let polling_rate: u32 = 250; // Hz
 
     let network_thread = network::start_thread(addr, command_receiver, reconection_notifier_sender, rumble_sender, should_shutdown.clone());
 

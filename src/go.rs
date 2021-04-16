@@ -1,11 +1,12 @@
-use std::{borrow::Borrow, sync::{Arc, atomic::{AtomicBool, Ordering}}, thread, time::Duration};
-
+use std::{borrow::Borrow, sync::{Arc, atomic::{AtomicBool, Ordering}}, thread, time::{Duration, Instant}};
+use std::num::NonZeroU32;
 use flume::{Receiver, Sender};
 use gilrs::{GamepadId, Gilrs, GilrsBuilder, ff::{BaseEffect, BaseEffectType, Effect, EffectBuilder}};
 use crate::{commands::{AttachData, Rumble, WriteCommand}, controller_manager::ControllerManager, handle_factory::HandleFactory, network::Message};
+use governor::{Jitter, Quota, RateLimiter, clock::{self, Clock, QuantaInstant}};
 
 pub fn go(
-    polling_rate: u64,
+    polling_rate: u32,
     sender: Sender<Message>,
     reconection_notifier: Receiver<()>,
     rumble_receiver: Receiver<Rumble>,
@@ -75,8 +76,20 @@ pub fn go(
     }
 
     let controller_manager = ControllerManager::new();
-    let loop_sleep_duration = Duration::from_millis(1000 / polling_rate);
+    let clock = clock::DefaultClock::default();
+    let limiter = RateLimiter::direct_with_clock(
+        Quota::per_second(NonZeroU32::new(polling_rate).unwrap()),
+        &clock
+    );
+    let jitter = Jitter::up_to(Duration::from_millis((1000 / polling_rate).into()));
     loop {
+        match limiter.check() {
+            Ok(_) => {},
+            Err(e) => {
+                thread::sleep(jitter + e.wait_time_from(clock.now()));
+            }
+        }
+
         if should_shutdown.load(Ordering::Relaxed) {
             return;
         }
@@ -86,14 +99,14 @@ pub fn go(
                 Rumble::Start(handle) => {
                     if let Some(controller) = controllers.iter().find(|c| c.handle == handle) {
                         if let Some(effect) = &controller.effect {
-                            effect.play();
+                            let _ = effect.play();
                         }
                     }
                 }
                 Rumble::Stop(handle) => {
                     if let Some(controller) = controllers.iter().find(|c| c.handle == handle) {
                         if let Some(effect) = &controller.effect {
-                            effect.stop();
+                            let _ = effect.stop();
                         }
                     }
                 }
@@ -130,8 +143,6 @@ pub fn go(
                 Ok(_) => {}
             }
         }
-
-        thread::sleep(loop_sleep_duration);
     }
 }
 
