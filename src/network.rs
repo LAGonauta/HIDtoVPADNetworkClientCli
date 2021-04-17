@@ -10,21 +10,19 @@ use crate::commands::{AttachCommand, AttachData, AttachResponse, Command, Dettac
 pub fn start_thread(
     wiiu_ip: IpAddr,
     tcp_command_sender: Sender<TcpMessage>,
-    tcp_command_receiver: Receiver<TcpMessage>,
-    udp_command_receiver: Receiver<UdpMessage>,
+    control_receiver: Receiver<TcpMessage>,
+    controller_receiver: Receiver<UdpMessage>,
     reconnection_sender: Sender<()>,
     rumble_sender: Sender<Rumble>,
     should_shutdown: Arc<AtomicBool>
 ) -> JoinHandle<()> {
     thread::spawn({
         move || {
-            let timeout = Duration::from_secs(1);
             let ping_interval = Duration::from_secs(1);
-            let mut last_ping = Instant::now();
 
-            let tcp_thread = start_tcp_thread(tcp_command_receiver.clone(), wiiu_ip, should_shutdown.clone());
+            let control_thread = start_control_thread(control_receiver.clone(), reconnection_sender, wiiu_ip, should_shutdown.clone());
 
-            let udp_thread = start_command_send_thread(udp_command_receiver, wiiu_ip, should_shutdown.clone());
+            let controller_thread = start_controller_thread(controller_receiver, wiiu_ip, should_shutdown.clone());
 
             let rumble_thread = start_rumble_thread(rumble_sender, wiiu_ip, should_shutdown.clone());
 
@@ -32,19 +30,27 @@ pub fn start_thread(
                 if should_shutdown.load(Ordering::Relaxed) {
                     break;
                 }
-                // send ping commands, rate limited
-                break;
+
+                let (s, r) = flume::unbounded();
+                match tcp_command_sender.send_timeout(TcpMessage::Ping(s), ping_interval) {
+                    Ok(_) => {
+                        let _ = r.recv_timeout(ping_interval);
+                    },
+                    Err(_) => {}
+                };
+                thread::sleep(ping_interval);
             }
 
-            let _ = udp_thread.join();
+            let _ = controller_thread.join();
             let _ = rumble_thread.join();
-            let _ = tcp_thread.join();
+            let _ = control_thread.join();
         }
     })
 }
 
-fn start_tcp_thread(
+fn start_control_thread(
     receiver: Receiver<TcpMessage>,
+    reconnection_notifier: Sender<()>,
     wiiu_ip: IpAddr,
     should_shutdown: Arc<AtomicBool>
 ) -> JoinHandle<()> {
@@ -64,28 +70,31 @@ fn start_tcp_thread(
             }
 
             match stream {
-                TcpConnectionResult::Good(ref mut stream) => {
+                TcpConnectionResult::Good(ref mut tcp_stream) => {
                     match receiver.recv_timeout(timeout) {
                         Ok(action) => {
                             match action {
                                 TcpMessage::Ping(sender) => {
                                     //println!("Ping!");
-                                    match stream.write_all(ping.byte_data()) {
+                                    match tcp_stream.write_all(ping.byte_data()) {
                                         Err(e) => {
-                                            println!("Unable to ping :(. Reconnecting... Error: {}", e);
+                                            println!("[Control] Unable to ping :(. Reconnecting... Error: {}", e);
+                                            stream = TcpConnectionResult::Bad;
                                             let _ = sender.send_timeout(PingResponse::Disconnect, timeout);
                                         }
                                         Ok(_) => {
-                                            match stream.read_u8() {
+                                            match tcp_stream.read_u8() {
                                                 Ok(val) => {
                                                     if val == TcpProtocol::TcpCommandPong.into() {
-                                                        //println!("Pong!")
+                                                        //println!("Pong!");
                                                         let _ = sender.send_timeout(PingResponse::Pong, timeout);
                                                     } else {
+                                                        stream = TcpConnectionResult::Bad;
                                                         let _ = sender.send_timeout(PingResponse::Disconnect, timeout);
                                                     }
                                                 },
                                                 Err(_) => {
+                                                    stream = TcpConnectionResult::Bad;
                                                     let _ = sender.send_timeout(PingResponse::Disconnect, timeout);
                                                 }
                                             }
@@ -93,8 +102,12 @@ fn start_tcp_thread(
                                     };
                                 }
                                 TcpMessage::Attach(attach_data) => {
+                                    let attached = attach_controller(attach_data.handle, tcp_stream);
+                                    if attached.is_none() {
+                                        stream = TcpConnectionResult::Bad; // not quite, needs to make it better
+                                    }
                                     let _r =
-                                        attach_data.response.send(attach_controller(attach_data.handle, stream));
+                                        attach_data.response.send(attached);
                                 }
                                 TcpMessage::Dettach(_) => {}
                             }
@@ -108,11 +121,12 @@ fn start_tcp_thread(
                     stream = tcp_connect(wiiu_ip);
                     match stream {
                         TcpConnectionResult::Bad => {
-                            println!("Unable to connect, waiting 2 seconds to try again");
+                            println!("[Control] Unable to connect, waiting 2 seconds to try again");
                             thread::sleep(Duration::from_secs(2));
                         },
                         TcpConnectionResult::Good(_) => {
                             // everyone can reconnect
+                            let _ = reconnection_notifier.send(());
                         }
                     }
                 }
@@ -121,7 +135,7 @@ fn start_tcp_thread(
     })
 }
 
-fn start_command_send_thread(
+fn start_controller_thread(
     command_receiver: Receiver<UdpMessage>,
     wiiu_ip: IpAddr,
     should_shutdown: Arc<AtomicBool>
@@ -140,9 +154,8 @@ fn start_command_send_thread(
                         match val {
                             UdpMessage::UdpData(data) => {
                                 if let Err(e) = socket.send(data.byte_data()) {
-                                    println!("Unable to send UDP data. Dropping and reconnecting. Error: {}", e);
+                                    println!("[Controller] Unable to send UDP data. Dropping and reconnecting. Error: {}", e);
                                     udp_socket = None;
-                                    continue;
                                 }
                             }
                         };
@@ -155,13 +168,13 @@ fn start_command_send_thread(
                             match socket.connect(SocketAddr::new(wiiu_ip, BaseProtocol::UdpPort.into())) {
                                 Ok(_) => {}
                                 Err(e) => {
-                                    println!("Unable to connect to send controller commands, trying again in 1 second: {}", e);
+                                    println!("[Controller] Unable to connect to send controller commands, trying again in 1 second: {}", e);
                                     thread::sleep(Duration::from_secs(1));
                                 }
                             };
                         },
                         None => {
-                            println!("Unable to connect to send controller commands, trying again in 1 second");
+                            println!("[Controller] Unable to connect to send controller commands, trying again in 1 second");
                             thread::sleep(Duration::from_secs(1));
                         }
                     }
@@ -212,7 +225,7 @@ fn start_rumble_thread(
                 None => {
                     udp_socket = udp_bind(BaseProtocol::UdpServerPort.into());
                     if udp_socket.is_none() {
-                        println!("Unable to open UDP server for rumble, trying again in 1 second.");
+                        println!("[Rumble] Unable to open UDP server, trying again in 1 second.");
                         thread::sleep(Duration::from_secs(1));
                     }
                 }

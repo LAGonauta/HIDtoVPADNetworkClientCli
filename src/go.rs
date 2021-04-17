@@ -1,4 +1,4 @@
-use std::{sync::{Arc, atomic::{AtomicBool, Ordering}}, thread};
+use std::{sync::{Arc, atomic::{AtomicBool, Ordering}}, thread, time::{Duration, Instant}};
 use std::num::NonZeroU32;
 use flume::{Receiver, Sender};
 use gilrs::{GamepadId, Gilrs, ff::{BaseEffect, BaseEffectType, Effect, EffectBuilder}};
@@ -79,10 +79,25 @@ pub fn go(
     let controller_manager = ControllerManager::new();
     let clock = clock::DefaultClock::default();
     let limiter = RateLimiter::direct_with_clock(
-        Quota::per_second(NonZeroU32::new(polling_rate).unwrap()),
+        // for some reason the synchronous solution requires to divide the polling rate. Might be interesting to use async-await.
+        Quota::per_second(NonZeroU32::new(polling_rate / 2).unwrap()).allow_burst(NonZeroU32::new(1u32).unwrap()),
         &clock
     );
+
+    let mut i = 0;
+    let mut last = Instant::now();
+    let interval = Duration::from_secs(1);
     loop {
+        // {
+        //     i = i + 1;
+        //     let now = Instant::now();
+        //     if now > last + interval {
+        //         println!("Count: {}", i);
+        //         i = 0;
+        //         last = now;
+        //     }
+        // }
+
         match limiter.check() {
             Ok(_) => {},
             Err(e) => {
