@@ -84,9 +84,10 @@ pub fn go(
         &clock
     );
 
-    let mut i = 0;
-    let mut last = Instant::now();
-    let interval = Duration::from_secs(1);
+    // let mut i = 0;
+    // let mut last = Instant::now();
+    // let interval = Duration::from_secs(1);
+    let send_timeout = Duration::from_secs(1);
     loop {
         // {
         //     i = i + 1;
@@ -153,7 +154,7 @@ pub fn go(
         if commands.len() > 0 {
             let write_command =
                 WriteCommand::new(&commands, 1);
-            match udp_sender.send(UdpMessage::UdpData(Box::new(write_command))) { // add timeout?
+            match udp_sender.send_timeout(UdpMessage::UdpData(Box::new(write_command)), send_timeout) { // add timeout?
                 Err(e) => println!("Unable to send data to thread: {}", e),
                 Ok(_) => {}
             }

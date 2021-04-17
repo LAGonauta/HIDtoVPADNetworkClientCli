@@ -31,7 +31,7 @@ pub fn start_thread(
                     break;
                 }
 
-                let (s, r) = flume::unbounded();
+                let (s, r) = flume::bounded(0);
                 match tcp_command_sender.send_timeout(TcpMessage::Ping(s), ping_interval) {
                     Ok(_) => {
                         let _ = r.recv_timeout(ping_interval);
@@ -154,7 +154,7 @@ fn start_controller_thread(
                         match val {
                             UdpMessage::UdpData(data) => {
                                 if let Err(e) = socket.send(data.byte_data()) {
-                                    println!("[Controller] Unable to send UDP data. {}", e);
+                                    println!("[Controller] Unable to send UDP data. Dropping packet. Error: {}", e);
                                     //udp_socket = None;
                                     //thread::sleep(Duration::from_secs(1));
                                 }
@@ -167,16 +167,17 @@ fn start_controller_thread(
                     match udp_socket {
                         Some(ref socket) => {
                             match socket.connect(SocketAddr::new(wiiu_ip, BaseProtocol::UdpPort.into())) {
-                                Ok(_) => {}
+                                Ok(_) => {
+                                    match socket.set_nonblocking(true) {
+                                        Ok(_) => println!("[Controller] Set to nonblocking"),
+                                        Err(e) => println!("[Controller] Unable to set nonblocking: {}", e)
+                                    }
+                                }
                                 Err(e) => {
                                     println!("[Controller] Unable to connect to send controller commands, trying again in 1 second: {}", e);
                                     thread::sleep(Duration::from_secs(1));
                                 }
                             };
-                            match socket.set_nonblocking(true) {
-                                Ok(_) => println!("[Controller] Set to nonblocking"),
-                                Err(e) => println!("[Controller] Unable to set nonblocking")
-                            }
                         },
                         None => {
                             println!("[Controller] Unable to connect to send controller commands, trying again in 1 second");
@@ -197,6 +198,7 @@ fn start_rumble_thread(
     thread::spawn(move || {
         let mut udp_socket: Option<UdpSocket> = None;
         let mut udp_buffer = [0; 1400];
+        let send_timeout = Duration::from_secs(1);
         loop {
             // add rate limiter?
             if should_shutdown.load(Ordering::Relaxed) {
@@ -213,9 +215,9 @@ fn start_rumble_thread(
                                 if data.read_u8() == UdpProtocol::UdpCommandRumble.into() {
                                     let handle = data.read_i32();
                                     if data.read_u8() == UdpProtocol::UdpCommandRumble.into() {
-                                        let _ = rumble_sender.send(Rumble::Start(handle));
+                                        let _ = rumble_sender.send_timeout(Rumble::Start(handle), send_timeout);
                                     } else {
-                                        let _ = rumble_sender.send(Rumble::Stop(handle));
+                                        let _ = rumble_sender.send_timeout(Rumble::Stop(handle), send_timeout);
                                     }
                                 }
     
@@ -229,9 +231,14 @@ fn start_rumble_thread(
                 },
                 None => {
                     udp_socket = udp_bind(BaseProtocol::UdpServerPort.into());
-                    if udp_socket.is_none() {
-                        println!("[Rumble] Unable to open UDP server, trying again in 1 second.");
-                        thread::sleep(Duration::from_secs(1));
+                    match udp_socket {
+                        Some(ref socket) => {
+                            let _ = socket.set_read_timeout(Some(send_timeout));
+                        },
+                        None => {
+                            println!("[Rumble] Unable to open UDP server, trying again in 1 second.");
+                            thread::sleep(Duration::from_secs(1));
+                        }
                     }
                 }
             }
@@ -243,9 +250,6 @@ fn tcp_connect(wiiu_ip: IpAddr) -> TcpConnectionResult {
     let addr: SocketAddr = SocketAddr::new(wiiu_ip, BaseProtocol::TcpPort.into());
     match TcpStream::connect_timeout(&addr, Duration::from_secs(2)) {
         Ok(mut stream) => {
-            //let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
-            //let _ = stream.set_write_timeout(Some(Duration::from_secs(2)));
-
             match handshake(&mut stream) {
                 HandshakeResult::Bad => println!("Handshake timeout"),
                 HandshakeResult::Good => return TcpConnectionResult::Good(stream)
@@ -267,9 +271,6 @@ fn udp_bind(port: i16) -> Option<UdpSocket> {
             return None
         }
     };
-
-    let _ = socket.set_read_timeout(Some(Duration::from_secs(1)));
-    let _ = socket.set_write_timeout(Some(Duration::from_secs(1)));
 
     return Some(socket);
 }
