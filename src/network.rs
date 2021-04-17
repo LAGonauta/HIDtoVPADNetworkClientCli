@@ -28,8 +28,6 @@ pub fn start_thread(
 
             let rumble_thread = start_rumble_thread(rumble_sender, wiiu_ip, should_shutdown.clone());
 
-            let ping_thread = start_tcp_thread(tcp_command_receiver, wiiu_ip, should_shutdown.clone());
-
             loop {
                 if should_shutdown.load(Ordering::Relaxed) {
                     break;
@@ -40,7 +38,6 @@ pub fn start_thread(
 
             let _ = udp_thread.join();
             let _ = rumble_thread.join();
-            let _ = ping_thread.join();
             let _ = tcp_thread.join();
         }
     })
