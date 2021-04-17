@@ -53,7 +53,7 @@ pub fn start_thread(
                 match &mut connection {
                     Some(connection_handle) => {
 
-                        match connection_handle.udp.recv_from(&mut udp_buffer) {
+                        match connection_handle.udp_server.recv_from(&mut udp_buffer) {
                             Ok((count, addr)) => {
                                 if count >= 6 && addr.ip() == wiiu_ip {
                                     let mut data = ByteBuffer::from_bytes(&udp_buffer);
@@ -159,24 +159,31 @@ fn connect(wiiu_ip: IpAddr) -> ConnectResult {
         }
     };
 
-    let udp_stream = match udp_bind() {
+    let udp_stream = match udp_bind(BaseProtocol::UdpPort.into()) {
         Some(val) => val,
         None => return ConnectResult::Bad
     };
 
-    ConnectResult::Good(Connection { tcp: tcp_stream, udp: udp_stream })
+    let _ = udp_stream.set_write_timeout(Some(Duration::from_millis(30)));
+
+    let udp_server = match udp_bind(BaseProtocol::UdpServerPort.into()) {
+        Some(val) => val,
+        None => return ConnectResult::Bad
+    };
+
+    let _ = udp_server.set_nonblocking(true);
+
+    ConnectResult::Good(Connection { tcp: tcp_stream, udp: udp_stream, udp_server })
 }
 
-fn udp_bind() -> Option<UdpSocket> {
-    let socket = match UdpSocket::bind(format!("0.0.0.0:{}", BaseProtocol::UdpServerPort as i16)) {
+fn udp_bind(port: u16) -> Option<UdpSocket> {
+    let socket = match UdpSocket::bind(format!("0.0.0.0:{}", port)) {
         Ok(val) => val,
         Err(e) => {
             println!("Unable to bind UDP: {}", e);
             return None
         }
     };
-
-    let _ = socket.set_nonblocking(true);
 
     return Some(socket);
 }
@@ -397,5 +404,6 @@ pub enum Message {
 
 pub struct Connection {
     pub tcp: TcpStream,
-    pub udp: UdpSocket
+    pub udp: UdpSocket,
+    pub udp_server: UdpSocket
 }

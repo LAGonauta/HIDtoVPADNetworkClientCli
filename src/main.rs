@@ -13,7 +13,7 @@ mod controller_manager;
 mod handle_factory;
 
 fn main() {
-    let (command_sender, command_receiver): (Sender<Message>, Receiver<Message>) = flume::bounded(2);
+    let (command_sender, command_receiver): (Sender<Message>, Receiver<Message>) = flume::bounded(0);
     let (reconection_notifier_sender, reconection_notifier_receiver): (Sender<()>, Receiver<()>) = flume::unbounded();
     let (rumble_sender, rumble_receiver): (Sender<Rumble>, Receiver<Rumble>) = flume::unbounded();
     let should_shutdown = Arc::new(AtomicBool::new(false));
