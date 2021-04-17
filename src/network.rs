@@ -154,9 +154,9 @@ fn start_controller_thread(
                         match val {
                             UdpMessage::UdpData(data) => {
                                 if let Err(e) = socket.send(data.byte_data()) {
-                                    println!("[Controller] Unable to send UDP data. Dropping and reconnecting in 1 second. Error: {}", e);
-                                    udp_socket = None;
-                                    thread::sleep(Duration::from_secs(1));
+                                    println!("[Controller] Unable to send UDP data. {}", e);
+                                    //udp_socket = None;
+                                    //thread::sleep(Duration::from_secs(1));
                                 }
                             }
                         };
@@ -173,6 +173,10 @@ fn start_controller_thread(
                                     thread::sleep(Duration::from_secs(1));
                                 }
                             };
+                            match socket.set_nonblocking(true) {
+                                Ok(_) => println!("[Controller] Set to nonblocking"),
+                                Err(e) => println!("[Controller] Unable to set nonblocking")
+                            }
                         },
                         None => {
                             println!("[Controller] Unable to connect to send controller commands, trying again in 1 second");
