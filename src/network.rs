@@ -136,9 +136,6 @@ pub fn start_thread(
     })
 }
 
-fn connect(ip: &str) -> ConnectResult {
-    let addr: SocketAddr = format!("{}:{}", ip, BaseProtocol::TcpPort as i16)
-        .parse().expect("Unable to parse socket address");
 fn connect(wiiu_ip: IpAddr) -> ConnectResult {
     let addr: SocketAddr = SocketAddr::new(wiiu_ip, BaseProtocol::TcpPort.into());
     let tcp_stream = match TcpStream::connect_timeout(&addr, Duration::from_secs(2)) {
