@@ -1,5 +1,6 @@
 [profile.release]
 lto = true
+debug = true
 
 [package]
 name = "network-client"
@@ -13,8 +14,9 @@ edition = "2018"
 gilrs = "0.8"
 bytebuffer = "0.2"
 rand = "0.8"
-byteorder = " 1.4"
+byteorder = " 1"
 flume = "0.10"
-ctrlc = "3.1"
+ctrlc = "3"
 governor = "0.3"
+clap = "2"
 env_logger = "0.7"

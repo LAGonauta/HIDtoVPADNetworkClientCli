@@ -5,6 +5,7 @@ use flume::{Sender, Receiver};
 use network::{BaseProtocol, Message};
 
 use std::net::IpAddr;
+use clap::{App, Arg};
 
 mod go;
 mod network;
@@ -13,6 +14,28 @@ mod controller_manager;
 mod handle_factory;
 
 fn main() {
+    let matches = App::new("HIDtoVPAD client written in Rust")
+        .version("1.0")
+        .author("LAGonauta")
+        .about("Connects HIDtoVPAD on your WiiU using little memory")
+        .arg(Arg::with_name("polling-rate")
+            .short("pr")
+            .long("polling-rate")
+            .value_name("POLLING_RATE")
+            .help("Sets the polling rate")
+            .default_value("250")
+            .takes_value(true))
+        .arg(Arg::with_name("IP")
+            .help("Sets the ip to connect to")
+            .required(true))
+        .arg(Arg::with_name("v")
+            .short("v")
+            .multiple(true)
+            .help("Sets the level of verbosity"))
+        .get_matches();
+
+
+
     let (command_sender, command_receiver): (Sender<Message>, Receiver<Message>) = flume::bounded(2);
     let (reconection_notifier_sender, reconection_notifier_receiver): (Sender<()>, Receiver<()>) = flume::unbounded();
     let (rumble_sender, rumble_receiver): (Sender<Rumble>, Receiver<Rumble>) = flume::unbounded();
