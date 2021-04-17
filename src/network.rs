@@ -154,7 +154,7 @@ fn start_controller_thread(
                         match val {
                             UdpMessage::UdpData(data) => {
                                 if let Err(e) = socket.send(data.byte_data()) {
-                                    println!("[Controller] Unable to send UDP data. Dropping packet. Error: {}", e);
+                                    eprintln!("[Controller] Unable to send UDP data. Dropping packet. Error: {}", e);
                                     //udp_socket = None;
                                     //thread::sleep(Duration::from_secs(1));
                                 }
