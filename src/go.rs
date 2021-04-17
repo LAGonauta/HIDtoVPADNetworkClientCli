@@ -1,13 +1,14 @@
-use std::{borrow::Borrow, sync::{Arc, atomic::{AtomicBool, Ordering}}, thread, time::{Duration, Instant}};
+use std::{sync::{Arc, atomic::{AtomicBool, Ordering}}, thread};
 use std::num::NonZeroU32;
 use flume::{Receiver, Sender};
-use gilrs::{GamepadId, Gilrs, GilrsBuilder, ff::{BaseEffect, BaseEffectType, Effect, EffectBuilder}};
-use crate::{commands::{AttachData, Rumble, WriteCommand}, controller_manager::ControllerManager, handle_factory::HandleFactory, network::Message};
-use governor::{Jitter, Quota, RateLimiter, clock::{self, Clock, QuantaInstant}};
+use gilrs::{GamepadId, Gilrs, ff::{BaseEffect, BaseEffectType, Effect, EffectBuilder}};
+use crate::{commands::{AttachData, Rumble, WriteCommand}, controller_manager::ControllerManager, handle_factory::HandleFactory, network::{TcpMessage, UdpMessage}};
+use governor::{Quota, RateLimiter, clock::{self, Clock}};
 
 pub fn go(
     polling_rate: u32,
-    sender: Sender<Message>,
+    tcp_sender: Sender<TcpMessage>,
+    udp_sender: Sender<UdpMessage>,
     reconection_notifier: Receiver<()>,
     rumble_receiver: Receiver<Rumble>,
     should_shutdown: Arc<AtomicBool>
@@ -19,7 +20,7 @@ pub fn go(
     let mut controllers = Vec::new();
     let (s, r) = flume::bounded(0);
     let attach = |handle: i32, gamepad_id: GamepadId| -> Option<Controller> {
-        match sender.send(Message::Attach(AttachData { handle, response: s.clone() })) {
+        match tcp_sender.send(TcpMessage::Attach(AttachData { handle, response: s.clone() })) {
             Ok(_) => {
                 match r.recv() {
                     Ok(val) => {
@@ -98,7 +99,7 @@ pub fn go(
                 Rumble::Start(handle) => {
                     if let Some(controller) = controllers.iter().find(|c| c.handle == handle) {
                         if let Some(effect) = &controller.effect {
-                            let _ = effect.play();
+                            let _ = effect.play(); // play only if it is playing? also check for how long the effect runs
                         }
                     }
                 }
@@ -137,7 +138,7 @@ pub fn go(
         if commands.len() > 0 {
             let write_command =
                 WriteCommand::new(&commands, 1);
-            match sender.send(Message::UdpData(Box::new(write_command))) {
+            match udp_sender.send(UdpMessage::UdpData(Box::new(write_command))) { // add timeout?
                 Err(e) => println!("Unable to send data to thread: {}", e),
                 Ok(_) => {}
             }

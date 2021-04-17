@@ -2,7 +2,7 @@ use std::{sync::{Arc, atomic::AtomicBool, atomic::Ordering}};
 
 use commands::Rumble;
 use flume::{Sender, Receiver};
-use network::{BaseProtocol, Message};
+use network::{TcpMessage, UdpMessage};
 
 use std::net::IpAddr;
 
@@ -13,14 +13,27 @@ mod controller_manager;
 mod handle_factory;
 
 fn main() {
-    let (command_sender, command_receiver): (Sender<Message>, Receiver<Message>) = flume::bounded(2);
-    let (reconection_notifier_sender, reconection_notifier_receiver): (Sender<()>, Receiver<()>) = flume::unbounded();
+    let (tcp_command_sender, tcp_command_receiver): (Sender<TcpMessage>, Receiver<TcpMessage>) = flume::bounded(2);
+    let (udp_command_sender, udp_command_receiver): (Sender<UdpMessage>, Receiver<UdpMessage>) = flume::bounded(2);
+
+    let (reconection_notifier_sender, reconection_notifier_receiver): (Sender<()>, Receiver<()>) = flume::unbounded(); // use BUS
+
     let (rumble_sender, rumble_receiver): (Sender<Rumble>, Receiver<Rumble>) = flume::unbounded();
-    let should_shutdown = Arc::new(AtomicBool::new(false));
+
+    let should_shutdown = Arc::new(AtomicBool::new(false)); // use BUS?
+
     let addr: IpAddr = "192.168.15.15".parse().unwrap();
+
     let polling_rate: u32 = 250; // Hz
 
-    let network_thread = network::start_thread(addr, command_receiver, reconection_notifier_sender, rumble_sender, should_shutdown.clone());
+    let network_thread = network::start_thread(
+        addr,
+        tcp_command_sender.clone(),
+        tcp_command_receiver,
+        udp_command_receiver.clone(),
+        reconection_notifier_sender,
+        rumble_sender,
+        should_shutdown.clone());
 
     // 1. build controllers with gamepadId and handle
 
@@ -31,7 +44,13 @@ fn main() {
     let go_thread = std::thread::spawn({
         let should_shutdown = should_shutdown.clone();
         move || {
-            go::go(polling_rate, command_sender, reconection_notifier_receiver, rumble_receiver, should_shutdown);
+            go::go(polling_rate,
+                tcp_command_sender,
+                udp_command_sender,
+                reconection_notifier_receiver,
+                rumble_receiver,
+                should_shutdown
+            );
         }
     });
 

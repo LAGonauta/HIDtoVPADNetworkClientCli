@@ -141,6 +141,10 @@ pub struct AttachData {
     pub response: Sender<Option<AttachResponse>>
 }
 
+pub struct DettachData {
+    pub handle: i32
+}
+
 pub struct AttachResponse {
     pub device_slot: i16,
     pub pad_slot: i8
