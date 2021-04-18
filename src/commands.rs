@@ -1,9 +1,8 @@
 use std::io::Write;
 
 use bytebuffer::ByteBuffer;
-use flume::Sender;
 
-use crate::{go::Controller, network::{TcpProtocol, UdpProtocol}};
+use crate::models::{Controller, TcpProtocol, UdpProtocol};
 
 pub trait Command : Send {
     fn data(&self) -> String;
@@ -134,23 +133,4 @@ impl Command for PingCommand {
     fn byte_data(&self) -> &Vec<u8> {
         &self.data
     }
-}
-
-pub struct AttachData {
-    pub handle: i32,
-    pub response: Sender<Option<AttachResponse>>
-}
-
-pub struct DettachData {
-    pub handle: i32
-}
-
-pub struct AttachResponse {
-    pub device_slot: i16,
-    pub pad_slot: i8
-}
-
-pub enum Rumble {
-    Start(i32),
-    Stop(i32)
 }

@@ -1,10 +1,11 @@
-use std::{net::{IpAddr, SocketAddr, TcpStream, UdpSocket}, sync::{Arc, atomic::AtomicBool, atomic::Ordering}, thread::{self, JoinHandle}, time::{Duration, Instant}};
+use std::{net::{IpAddr, SocketAddr, TcpStream, UdpSocket}, sync::Arc, thread::{self, JoinHandle}, time::Duration};
 use std::io::Write;
 use bytebuffer::ByteBuffer;
 use byteorder::{NetworkEndian, ReadBytesExt, WriteBytesExt};
 use flume::{Receiver, Sender};
+use atomic::{Atomic, Ordering};
 
-use crate::commands::{AttachCommand, AttachData, AttachResponse, Command, DettachData, PingCommand, Rumble};
+use crate::{commands::{AttachCommand, Command, PingCommand}, models::{AttachResponse, PingResponse, Rumble, TcpMessage, TcpProtocol, UdpMessage, UdpProtocol}};
 
 // change reconnection sender to an enum: Disconnected, Reconnected
 pub fn start_thread(
@@ -14,7 +15,7 @@ pub fn start_thread(
     controller_receiver: Receiver<UdpMessage>,
     reconnection_sender: Sender<()>,
     rumble_sender: Sender<Rumble>,
-    should_shutdown: Arc<AtomicBool>
+    should_shutdown: Arc<Atomic<bool>>
 ) -> JoinHandle<()> {
     thread::spawn({
         move || {
@@ -52,7 +53,7 @@ fn start_control_thread(
     receiver: Receiver<TcpMessage>,
     reconnection_notifier: Sender<()>,
     wiiu_ip: IpAddr,
-    should_shutdown: Arc<AtomicBool>
+    should_shutdown: Arc<Atomic<bool>>
 ) -> JoinHandle<()> {
     thread::spawn(move || {
         let timeout = Duration::from_secs(1);
@@ -138,7 +139,7 @@ fn start_control_thread(
 fn start_controller_thread(
     command_receiver: Receiver<UdpMessage>,
     wiiu_ip: IpAddr,
-    should_shutdown: Arc<AtomicBool>
+    should_shutdown: Arc<Atomic<bool>>
 ) -> JoinHandle<()> {
     thread::spawn(move || {
         let mut udp_socket: Option<UdpSocket> = None;
@@ -193,7 +194,7 @@ fn start_controller_thread(
 fn start_rumble_thread(
     rumble_sender: Sender<Rumble>,
     wiiu_ip: IpAddr,
-    should_shutdown: Arc<AtomicBool>
+    should_shutdown: Arc<Atomic<bool>>
 ) -> JoinHandle<()> {
     thread::spawn(move || {
         let mut udp_socket: Option<UdpSocket> = None;
@@ -420,7 +421,7 @@ impl From<u8> for ProtocolVersion {
 }
 
 #[derive(Copy, Clone)]
-pub enum BaseProtocol {
+enum BaseProtocol {
     //Version = ProtocolVersion::Version3 as isize,
 
     TcpPort = 8112,
@@ -444,60 +445,4 @@ impl Into<u8> for BaseProtocol {
     fn into(self) -> u8 {
         self as u8
     }
-}
-
-pub enum TcpProtocol {
-    TcpCommandAttach = 0x01,
-    TcpCommandDetach = 0x02,
-    TcpCommandPing = 0xF0,
-    TcpCommandPong = 0xF1,
-
-    TcpCommandAttachConfigFound = 0xE0,
-    TcpCommandAttachConfigNotFound = 0xE1,
-    TcpCommandAttachUserdataOkay = 0xE8,
-    TcpCommandAttachUserdataBad = 0xE9
-}
-
-impl Into<u16> for TcpProtocol {
-    fn into(self) -> u16 {
-        self as u16
-    }
-}
-
-impl Into<u8> for TcpProtocol {
-    fn into(self) -> u8 {
-        self as u8
-    }
-}
-
-pub enum UdpProtocol {
-    UdpCommandData = 0x03,
-    UdpCommandRumble = 0x01
-}
-
-impl Into<u16> for UdpProtocol {
-    fn into(self) -> u16 {
-        self as u16
-    }
-}
-
-impl Into<u8> for UdpProtocol {
-    fn into(self) -> u8 {
-        self as u8
-    }
-}
-
-pub enum TcpMessage {
-    Attach(AttachData),
-    Dettach(DettachData),
-    Ping(Sender<PingResponse>)
-}
-
-pub enum UdpMessage {
-    UdpData(Box<dyn Command>)
-}
-
-enum PingResponse {
-    Pong,
-    Disconnect
 }

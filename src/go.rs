@@ -1,9 +1,10 @@
-use std::{sync::{Arc, atomic::{AtomicBool, Ordering}}, thread, time::{Duration, Instant}};
+use std::{sync::Arc, thread, time::Duration};
 use std::num::NonZeroU32;
 use flume::{Receiver, Sender};
-use gilrs::{GamepadId, Gilrs, ff::{BaseEffect, BaseEffectType, Effect, EffectBuilder}};
-use crate::{commands::{AttachData, Rumble, WriteCommand}, controller_manager::ControllerManager, handle_factory::HandleFactory, network::{TcpMessage, UdpMessage}};
+use gilrs::{GamepadId, Gilrs, ff::{BaseEffect, BaseEffectType, EffectBuilder}};
+use crate::{commands::WriteCommand, controller_manager::ControllerManager, handle_factory::HandleFactory, models::{Controller, Rumble, AttachData, TcpMessage, UdpMessage}};
 use governor::{Quota, RateLimiter, clock::{self, Clock}};
+use atomic::{Atomic, Ordering};
 
 pub fn go(
     polling_rate: u32,
@@ -11,7 +12,7 @@ pub fn go(
     udp_sender: Sender<UdpMessage>,
     reconection_notifier: Receiver<()>,
     rumble_receiver: Receiver<Rumble>,
-    should_shutdown: Arc<AtomicBool>
+    should_shutdown: Arc<Atomic<bool>>
 ) {
     let mut gilrs = Gilrs::new().unwrap();
 
@@ -160,12 +161,4 @@ pub fn go(
             }
         }
     }
-}
-
-pub struct Controller {
-    pub id: GamepadId,
-    pub handle: i32,
-    pub device_slot: i16,
-    pub pad_slot: i8,
-    pub effect: Option<Effect>
 }
