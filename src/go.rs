@@ -2,7 +2,7 @@ use std::{sync::Arc, thread, time::Duration};
 use std::num::NonZeroU32;
 use flume::{Receiver, Sender};
 use gilrs::{GamepadId, Gilrs, ff::{BaseEffect, BaseEffectType, EffectBuilder}};
-use crate::{commands::WriteCommand, controller_manager::ControllerManager, handle_factory::HandleFactory, models::{Controller, Rumble, AttachData, TcpMessage, UdpMessage}};
+use crate::{commands::WriteCommand, controller_manager::ControllerManager, handle_factory::HandleFactory, models::{ApplicationState, AttachData, Controller, Rumble, TcpMessage, UdpMessage}};
 use governor::{Quota, RateLimiter, clock::{self, Clock}};
 use atomic::{Atomic, Ordering};
 
@@ -12,7 +12,7 @@ pub fn go(
     udp_sender: Sender<UdpMessage>,
     reconection_notifier: Receiver<()>,
     rumble_receiver: Receiver<Rumble>,
-    should_shutdown: Arc<Atomic<bool>>
+    application_state: Arc<Atomic<ApplicationState>>
 ) {
     let mut gilrs = Gilrs::new().unwrap();
 
@@ -107,8 +107,13 @@ pub fn go(
             }
         }
 
-        if should_shutdown.load(Ordering::Relaxed) {
-            return;
+        match application_state.load(Ordering::Relaxed) {
+            ApplicationState::Disconnected => {
+                thread::sleep(Duration::from_secs(1));
+                continue;
+            },
+            ApplicationState::Exiting => return,
+            ApplicationState::Connected => {}
         }
 
         if let Ok(rumble) = rumble_receiver.try_recv() {

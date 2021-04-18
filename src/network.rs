@@ -5,9 +5,8 @@ use byteorder::{NetworkEndian, ReadBytesExt, WriteBytesExt};
 use flume::{Receiver, Sender};
 use atomic::{Atomic, Ordering};
 
-use crate::{commands::{AttachCommand, Command, PingCommand}, models::{AttachResponse, PingResponse, Rumble, TcpMessage, TcpProtocol, UdpMessage, UdpProtocol}};
+use crate::{commands::{AttachCommand, Command, PingCommand}, models::{ApplicationState, AttachResponse, PingResponse, Rumble, TcpMessage, TcpProtocol, UdpMessage, UdpProtocol}};
 
-// change reconnection sender to an enum: Disconnected, Reconnected
 pub fn start_thread(
     wiiu_ip: IpAddr,
     tcp_command_sender: Sender<TcpMessage>,
@@ -15,21 +14,26 @@ pub fn start_thread(
     controller_receiver: Receiver<UdpMessage>,
     reconnection_sender: Sender<()>,
     rumble_sender: Sender<Rumble>,
-    should_shutdown: Arc<Atomic<bool>>
+    application_state: Arc<Atomic<ApplicationState>>
 ) -> JoinHandle<()> {
     thread::spawn({
         move || {
             let ping_interval = Duration::from_secs(1);
 
-            let control_thread = start_control_thread(control_receiver.clone(), reconnection_sender, wiiu_ip, should_shutdown.clone());
+            let control_thread = start_control_thread(control_receiver.clone(), reconnection_sender, wiiu_ip, application_state.clone());
 
-            let controller_thread = start_controller_thread(controller_receiver, wiiu_ip, should_shutdown.clone());
+            let controller_thread = start_controller_thread(controller_receiver, wiiu_ip, application_state.clone());
 
-            let rumble_thread = start_rumble_thread(rumble_sender, wiiu_ip, should_shutdown.clone());
+            let rumble_thread = start_rumble_thread(rumble_sender, wiiu_ip, application_state.clone());
 
             loop {
-                if should_shutdown.load(Ordering::Relaxed) {
-                    break;
+                match application_state.load(Ordering::Relaxed) {
+                    ApplicationState::Disconnected => {
+                        thread::sleep(Duration::from_secs(1));
+                        continue;
+                    },
+                    ApplicationState::Exiting => break,
+                    ApplicationState::Connected => {}
                 }
 
                 let (s, r) = flume::bounded(0);
@@ -53,14 +57,14 @@ fn start_control_thread(
     receiver: Receiver<TcpMessage>,
     reconnection_notifier: Sender<()>,
     wiiu_ip: IpAddr,
-    should_shutdown: Arc<Atomic<bool>>
+    application_state: Arc<Atomic<ApplicationState>>
 ) -> JoinHandle<()> {
     thread::spawn(move || {
         let timeout = Duration::from_secs(1);
         let ping = PingCommand::new();
         let mut stream = TcpConnectionResult::Bad;
         loop {
-            if should_shutdown.load(Ordering::Relaxed) {
+            if application_state.load(Ordering::Relaxed).is_exiting() {
                 match stream {
                     TcpConnectionResult::Bad => {}
                     TcpConnectionResult::Good(ref mut stream) => {
@@ -119,6 +123,7 @@ fn start_control_thread(
                 },
                 TcpConnectionResult::Bad => {
                     // everyone should disconnect and wait for reconnection command
+                    application_state.store(ApplicationState::Disconnected, Ordering::SeqCst);
                     stream = tcp_connect(wiiu_ip);
                     match stream {
                         TcpConnectionResult::Bad => {
@@ -128,6 +133,9 @@ fn start_control_thread(
                         TcpConnectionResult::Good(_) => {
                             // everyone can reconnect
                             let _ = reconnection_notifier.send(());
+                            let _ = application_state.compare_exchange(
+                                ApplicationState::Disconnected, ApplicationState::Connected,
+                                Ordering::SeqCst, Ordering::Relaxed);
                         }
                     }
                 }
@@ -139,14 +147,19 @@ fn start_control_thread(
 fn start_controller_thread(
     command_receiver: Receiver<UdpMessage>,
     wiiu_ip: IpAddr,
-    should_shutdown: Arc<Atomic<bool>>
+    application_state: Arc<Atomic<ApplicationState>>
 ) -> JoinHandle<()> {
     thread::spawn(move || {
         let mut udp_socket: Option<UdpSocket> = None;
         let receive_timeout = Duration::from_secs(1);
         loop {
-            if should_shutdown.load(Ordering::Relaxed) {
-                return;
+            match application_state.load(Ordering::Relaxed) {
+                ApplicationState::Disconnected => {
+                    thread::sleep(Duration::from_secs(1));
+                    continue;
+                },
+                ApplicationState::Exiting => return,
+                ApplicationState::Connected => {}
             }
 
             match udp_socket {
@@ -156,8 +169,6 @@ fn start_controller_thread(
                             UdpMessage::UdpData(data) => {
                                 if let Err(e) = socket.send(data.byte_data()) {
                                     eprintln!("[Controller] Unable to send UDP data. Dropping packet. Error: {}", e);
-                                    //udp_socket = None;
-                                    //thread::sleep(Duration::from_secs(1));
                                 }
                             }
                         };
@@ -194,16 +205,20 @@ fn start_controller_thread(
 fn start_rumble_thread(
     rumble_sender: Sender<Rumble>,
     wiiu_ip: IpAddr,
-    should_shutdown: Arc<Atomic<bool>>
+    application_state: Arc<Atomic<ApplicationState>>
 ) -> JoinHandle<()> {
     thread::spawn(move || {
         let mut udp_socket: Option<UdpSocket> = None;
         let mut udp_buffer = [0; 1400];
         let send_timeout = Duration::from_secs(1);
         loop {
-            // add rate limiter?
-            if should_shutdown.load(Ordering::Relaxed) {
-                return;
+            match application_state.load(Ordering::Relaxed) {
+                ApplicationState::Disconnected => {
+                    thread::sleep(Duration::from_secs(1));
+                    continue;
+                },
+                ApplicationState::Exiting => return,
+                ApplicationState::Connected => {}
             }
 
             match udp_socket {

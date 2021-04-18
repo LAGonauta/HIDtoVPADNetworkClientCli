@@ -1,6 +1,7 @@
 use std::{sync::{Arc, atomic::Ordering}};
 
 use atomic::Atomic;
+use models::ApplicationState;
 
 use std::net::IpAddr;
 
@@ -22,7 +23,7 @@ fn main() {
 
     let (rumble_sender, rumble_receiver) = flume::bounded(0);
 
-    let should_shutdown = Arc::new(Atomic::new(false));
+    let application_state = Arc::new(Atomic::new(ApplicationState::Disconnected));
 
     let network_thread = network::start_thread(
         addr,
@@ -31,33 +32,35 @@ fn main() {
         udp_command_receiver.clone(),
         reconection_notifier_sender,
         rumble_sender,
-        should_shutdown.clone());
+        application_state.clone());
 
     let go_thread = std::thread::spawn({
-        let should_shutdown = should_shutdown.clone();
+        let application_state = application_state.clone();
         move || {
             go::go(polling_rate,
                 tcp_command_sender,
                 udp_command_sender,
                 reconection_notifier_receiver,
                 rumble_receiver,
-                should_shutdown
+                application_state
             );
         }
     });
 
     ctrlc::set_handler({
-        let should_shutdown = should_shutdown.clone();
+        let application_state = application_state.clone();
         move || {
-            should_shutdown.store(true, Ordering::Relaxed);
+            application_state.store(ApplicationState::Exiting, Ordering::Relaxed);
+            println!("### Press enter to finish ###");
         }
     })
     .expect("Error setting Ctrl-C handler");
 
-    println!("Press enter to exit...");
+    println!("### Press enter to exit ###");
     let _ = std::io::stdin().read_line(&mut String::new());
+    println!("---> Exiting <---");
 
-    should_shutdown.store(true, Ordering::Relaxed);
+    application_state.store(ApplicationState::Exiting, Ordering::Relaxed);
     let _ = network_thread.join();
     let _ = go_thread.join();
 }

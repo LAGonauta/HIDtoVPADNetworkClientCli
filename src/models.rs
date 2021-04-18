@@ -85,3 +85,24 @@ pub enum Rumble {
     Start(i32),
     Stop(i32)
 }
+
+#[derive(Clone, Copy)]
+pub enum ApplicationState {
+    Disconnected,
+    Connected,
+    Exiting
+}
+
+impl ApplicationState {
+    pub const fn is_exiting(&self) -> bool {
+        matches!(*self, ApplicationState::Exiting)
+    }
+
+    pub const fn is_disconnected(&self) -> bool {
+        matches!(*self, ApplicationState::Disconnected)
+    }
+
+    pub const fn is_connected(&self) -> bool {
+        matches!(*self, ApplicationState::Connected)
+    }
+}
