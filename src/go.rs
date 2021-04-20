@@ -1,16 +1,18 @@
-use std::{borrow::Borrow, sync::{Arc, atomic::{AtomicBool, Ordering}}, thread, time::{Duration, Instant}};
+use std::{sync::Arc, thread, time::Duration};
 use std::num::NonZeroU32;
 use flume::{Receiver, Sender};
-use gilrs::{GamepadId, Gilrs, GilrsBuilder, ff::{BaseEffect, BaseEffectType, Effect, EffectBuilder}};
-use crate::{commands::{AttachData, Rumble, WriteCommand}, controller_manager::ControllerManager, handle_factory::HandleFactory, network::Message};
-use governor::{Jitter, Quota, RateLimiter, clock::{self, Clock, QuantaInstant}};
+use gilrs::{GamepadId, Gilrs, ff::{BaseEffect, BaseEffectType, EffectBuilder}};
+use crate::{commands::WriteCommand, controller_manager::ControllerManager, handle_factory::HandleFactory, models::{ApplicationState, AttachData, Controller, Rumble, TcpMessage, UdpMessage}};
+use governor::{Quota, RateLimiter, clock::{self, Clock}};
+use atomic::{Atomic, Ordering};
 
 pub fn go(
     polling_rate: u32,
-    sender: Sender<Message>,
+    tcp_sender: Sender<TcpMessage>,
+    udp_sender: Sender<UdpMessage>,
     reconection_notifier: Receiver<()>,
     rumble_receiver: Receiver<Rumble>,
-    should_shutdown: Arc<AtomicBool>
+    application_state: Arc<Atomic<ApplicationState>>
 ) {
     let mut gilrs = Gilrs::new().unwrap();
 
@@ -19,7 +21,7 @@ pub fn go(
     let mut controllers = Vec::new();
     let (s, r) = flume::bounded(0);
     let attach = |handle: i32, gamepad_id: GamepadId| -> Option<Controller> {
-        match sender.send(Message::Attach(AttachData { handle, response: s.clone() })) {
+        match tcp_sender.send(TcpMessage::Attach(AttachData { handle, response: s.clone() })) {
             Ok(_) => {
                 match r.recv() {
                     Ok(val) => {
@@ -78,10 +80,26 @@ pub fn go(
     let controller_manager = ControllerManager::new();
     let clock = clock::DefaultClock::default();
     let limiter = RateLimiter::direct_with_clock(
-        Quota::per_second(NonZeroU32::new(polling_rate).unwrap()),
+        // for some reason the synchronous solution requires to divide the polling rate. Might be interesting to use async-await.
+        Quota::per_second(NonZeroU32::new(polling_rate / 2).unwrap()).allow_burst(NonZeroU32::new(1u32).unwrap()),
         &clock
     );
+
+    // let mut i = 0;
+    // let mut last = Instant::now();
+    // let interval = Duration::from_secs(1);
+    let send_timeout = Duration::from_secs(1);
     loop {
+        // {
+        //     i = i + 1;
+        //     let now = Instant::now();
+        //     if now > last + interval {
+        //         println!("Count: {}", i);
+        //         i = 0;
+        //         last = now;
+        //     }
+        // }
+
         match limiter.check() {
             Ok(_) => {},
             Err(e) => {
@@ -89,8 +107,13 @@ pub fn go(
             }
         }
 
-        if should_shutdown.load(Ordering::Relaxed) {
-            return;
+        match application_state.load(Ordering::Relaxed) {
+            ApplicationState::Disconnected => {
+                thread::sleep(Duration::from_secs(1));
+                continue;
+            },
+            ApplicationState::Exiting => return,
+            ApplicationState::Connected => {}
         }
 
         if let Ok(rumble) = rumble_receiver.try_recv() {
@@ -98,7 +121,7 @@ pub fn go(
                 Rumble::Start(handle) => {
                     if let Some(controller) = controllers.iter().find(|c| c.handle == handle) {
                         if let Some(effect) = &controller.effect {
-                            let _ = effect.play();
+                            let _ = effect.play(); // play only if it is playing? also check for how long the effect runs
                         }
                     }
                 }
@@ -137,18 +160,10 @@ pub fn go(
         if commands.len() > 0 {
             let write_command =
                 WriteCommand::new(&commands, 1);
-            match sender.send(Message::UdpData(Box::new(write_command))) {
+            match udp_sender.send_timeout(UdpMessage::UdpData(Box::new(write_command)), send_timeout) { // add timeout?
                 Err(e) => println!("Unable to send data to thread: {}", e),
                 Ok(_) => {}
             }
         }
     }
-}
-
-pub struct Controller {
-    pub id: GamepadId,
-    pub handle: i32,
-    pub device_slot: i16,
-    pub pad_slot: i8,
-    pub effect: Option<Effect>
 }

@@ -1,134 +1,142 @@
-use std::{net::{IpAddr, SocketAddr, TcpStream, UdpSocket}, sync::{Arc, atomic::AtomicBool, atomic::Ordering}, thread::{self, JoinHandle}, time::{Duration, Instant}};
+use std::{net::{IpAddr, SocketAddr, TcpStream, UdpSocket}, sync::Arc, thread::{self, JoinHandle}, time::Duration};
 use std::io::Write;
 use bytebuffer::ByteBuffer;
 use byteorder::{NetworkEndian, ReadBytesExt, WriteBytesExt};
 use flume::{Receiver, Sender};
+use atomic::{Atomic, Ordering};
 
-use crate::commands::{AttachCommand, AttachData, AttachResponse, Command, PingCommand, Rumble};
+use crate::{commands::{AttachCommand, Command, PingCommand}, models::{ApplicationState, AttachResponse, PingResponse, Rumble, TcpMessage, TcpProtocol, UdpMessage, UdpProtocol}};
 
-// change reconnection sender to an enum: Disconnected, Reconnected
 pub fn start_thread(
     wiiu_ip: IpAddr,
-    command_receiver: Receiver<Message>,
+    tcp_command_sender: Sender<TcpMessage>,
+    control_receiver: Receiver<TcpMessage>,
+    controller_receiver: Receiver<UdpMessage>,
     reconnection_sender: Sender<()>,
     rumble_sender: Sender<Rumble>,
-    should_shutdown: Arc<AtomicBool>
+    application_state: Arc<Atomic<ApplicationState>>
 ) -> JoinHandle<()> {
     thread::spawn({
         move || {
-            let connect = || {
-                loop {
-                    match connect(wiiu_ip) {
-                        ConnectResult::Bad => {
-                            println!("Unable to connect :(, trying again in 2 seconds.");
-                            if should_shutdown.load(Ordering::Relaxed) {
-                                return None;
+            let ping_interval = Duration::from_secs(1);
+
+            let control_thread = start_control_thread(control_receiver.clone(), reconnection_sender, wiiu_ip, application_state.clone());
+
+            let controller_thread = start_controller_thread(controller_receiver, wiiu_ip, application_state.clone());
+
+            let rumble_thread = start_rumble_thread(rumble_sender, wiiu_ip, application_state.clone());
+
+            loop {
+                match application_state.load(Ordering::Relaxed) {
+                    ApplicationState::Disconnected => {
+                        thread::sleep(Duration::from_secs(1));
+                        continue;
+                    },
+                    ApplicationState::Exiting => break,
+                    ApplicationState::Connected => {}
+                }
+
+                let (s, r) = flume::bounded(0);
+                match tcp_command_sender.send_timeout(TcpMessage::Ping(s), ping_interval) {
+                    Ok(_) => {
+                        let _ = r.recv_timeout(ping_interval);
+                    },
+                    Err(_) => {}
+                };
+                thread::sleep(ping_interval);
+            }
+
+            let _ = controller_thread.join();
+            let _ = rumble_thread.join();
+            let _ = control_thread.join();
+        }
+    })
+}
+
+fn start_control_thread(
+    receiver: Receiver<TcpMessage>,
+    reconnection_notifier: Sender<()>,
+    wiiu_ip: IpAddr,
+    application_state: Arc<Atomic<ApplicationState>>
+) -> JoinHandle<()> {
+    thread::spawn(move || {
+        let timeout = Duration::from_secs(1);
+        let ping = PingCommand::new();
+        let mut stream = TcpConnectionResult::Bad;
+        loop {
+            if application_state.load(Ordering::Relaxed).is_exiting() {
+                match stream {
+                    TcpConnectionResult::Bad => {}
+                    TcpConnectionResult::Good(ref mut stream) => {
+                        close(stream);
+                    }
+                }
+                return;
+            }
+
+            match stream {
+                TcpConnectionResult::Good(ref mut tcp_stream) => {
+                    match receiver.recv_timeout(timeout) {
+                        Ok(action) => {
+                            match action {
+                                TcpMessage::Ping(sender) => {
+                                    //println!("Ping!");
+                                    match tcp_stream.write_all(ping.byte_data()) {
+                                        Err(e) => {
+                                            println!("[Control] Unable to ping :(. Reconnecting... Error: {}", e);
+                                            stream = TcpConnectionResult::Bad;
+                                            let _ = sender.send_timeout(PingResponse::Disconnect, timeout);
+                                        }
+                                        Ok(_) => {
+                                            match tcp_stream.read_u8() {
+                                                Ok(val) => {
+                                                    if val == TcpProtocol::TcpCommandPong.into() {
+                                                        //println!("Pong!");
+                                                        let _ = sender.send_timeout(PingResponse::Pong, timeout);
+                                                    } else {
+                                                        stream = TcpConnectionResult::Bad;
+                                                        let _ = sender.send_timeout(PingResponse::Disconnect, timeout);
+                                                    }
+                                                },
+                                                Err(_) => {
+                                                    stream = TcpConnectionResult::Bad;
+                                                    let _ = sender.send_timeout(PingResponse::Disconnect, timeout);
+                                                }
+                                            }
+                                        }
+                                    };
+                                }
+                                TcpMessage::Attach(attach_data) => {
+                                    let attached = attach_controller(attach_data.handle, tcp_stream);
+                                    if attached.is_none() {
+                                        stream = TcpConnectionResult::Bad; // not quite, needs to make it better
+                                    }
+                                    let _r =
+                                        attach_data.response.send(attached);
+                                }
+                                TcpMessage::Dettach(_) => {}
                             }
+        
+                        }
+                        Err(_) => {}
+                    };
+                },
+                TcpConnectionResult::Bad => {
+                    // everyone should disconnect and wait for reconnection command
+                    application_state.store(ApplicationState::Disconnected, Ordering::SeqCst);
+                    stream = tcp_connect(wiiu_ip);
+                    match stream {
+                        TcpConnectionResult::Bad => {
+                            println!("[Control] Unable to connect, waiting 2 seconds to try again");
                             thread::sleep(Duration::from_secs(2));
                         },
-                        ConnectResult::Good(stream) => {
-                            println!("Connected to the server!");
-                            return Some(stream);
+                        TcpConnectionResult::Good(_) => {
+                            // everyone can reconnect
+                            let _ = reconnection_notifier.send(());
+                            let _ = application_state.compare_exchange(
+                                ApplicationState::Disconnected, ApplicationState::Connected,
+                                Ordering::SeqCst, Ordering::Relaxed);
                         }
-                    };
-                }
-            };
-    
-            let mut connection = connect();
-            let timeout = Duration::from_secs(1);
-            let ping_interval = Duration::from_secs(1);
-            let ping = PingCommand::new();
-            let mut last_ping = Instant::now();
-            let mut udp_buffer = [0; 1400];
-            let wiiu_udp_addr = SocketAddr::new(wiiu_ip, BaseProtocol::UdpPort.into());
-            loop {
-    
-                if should_shutdown.load(Ordering::Relaxed) {
-                    if let Some(connection) = &mut connection {
-                        close(&mut connection.tcp);
-                    }
-                    return;
-                }
-    
-                match &mut connection {
-                    Some(connection_handle) => {
-
-                        match connection_handle.udp.recv_from(&mut udp_buffer) {
-                            Ok((count, addr)) => {
-                                if count >= 6 && addr.ip() == wiiu_ip {
-                                    let mut data = ByteBuffer::from_bytes(&udp_buffer);
-    
-                                    if data.read_u8() == UdpProtocol::UdpCommandRumble.into() {
-                                        let handle = data.read_i32();
-                                        if data.read_u8() == UdpProtocol::UdpCommandRumble.into() {
-                                            let _ = rumble_sender.send(Rumble::Start(handle));
-                                        } else {
-                                            let _ = rumble_sender.send(Rumble::Stop(handle));
-                                        }
-                                    }
-        
-                                    udp_buffer.fill(0);
-                                }
-                            }
-                            Err(_e) => {}
-                        }
-
-                        if let Ok(val) = command_receiver.recv_timeout(timeout) {
-                            match val {
-                                Message::Terminate => return,
-                                Message::UdpData(data) => {
-                                    if let Err(e) = connection_handle.udp.send_to(data.byte_data(), wiiu_udp_addr) {
-                                        println!("Unable to send UDP data. Dropping and reconnecting. Error: {}", e);
-                                        connection = None;
-                                        continue;
-                                    }
-                                }
-                                Message::TcpData(data) => {
-                                    if let Err(e) = connection_handle.tcp.write_all(data.byte_data()) {
-                                        println!("Unable to send TCP data. Dropping and reconnecting. Error: {}", e);
-                                        connection = None;
-                                        continue;
-                                    }
-                                }
-                                Message::Attach(val) => {
-                                    let _r = val.response.send(attach_controller(val.handle, &mut connection_handle.tcp));
-                                }
-                            };
-                        }
-            
-                        // move the ping to another thread for lower latency
-                        let now = Instant::now();
-                        if now > last_ping + ping_interval {
-                            //println!("Ping!");
-                            match connection_handle.tcp.write_all(ping.byte_data()) {
-                                Err(e) => {
-                                    println!("Unable to ping :(. Reconnecting... Error: {}", e);
-                                    connection = None;
-                                    continue;
-                                }
-                                Ok(_) => {
-                                    match connection_handle.tcp.read_u8() {
-                                        Ok(val) => {
-                                            if val == TcpProtocol::TcpCommandPong.into() {
-                                                //println!("Pong!")
-                                            } else {
-                                                connection = None;
-                                                continue;
-                                            }
-                                        },
-                                        Err(_) => {
-                                            connection = None;
-                                            continue;
-                                        }
-                                    }
-                                }
-                            };
-                            last_ping = now;
-                        }
-                    },
-                    None => {
-                        connection = connect();
-                        let _r = reconnection_sender.send(());
                     }
                 }
             }
@@ -136,47 +144,149 @@ pub fn start_thread(
     })
 }
 
-fn connect(wiiu_ip: IpAddr) -> ConnectResult {
-    let addr: SocketAddr = SocketAddr::new(wiiu_ip, BaseProtocol::TcpPort.into());
-    let tcp_stream = match TcpStream::connect_timeout(&addr, Duration::from_secs(2)) {
-        Ok(mut stream) => {
-            let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
-            let _ = stream.set_write_timeout(Some(Duration::from_secs(2)));
+fn start_controller_thread(
+    command_receiver: Receiver<UdpMessage>,
+    wiiu_ip: IpAddr,
+    application_state: Arc<Atomic<ApplicationState>>
+) -> JoinHandle<()> {
+    thread::spawn(move || {
+        let mut udp_socket: Option<UdpSocket> = None;
+        let receive_timeout = Duration::from_secs(1);
+        loop {
+            match application_state.load(Ordering::Relaxed) {
+                ApplicationState::Disconnected => {
+                    thread::sleep(Duration::from_secs(1));
+                    continue;
+                },
+                ApplicationState::Exiting => return,
+                ApplicationState::Connected => {}
+            }
 
-            match handshake(&mut stream) {
-                HandshakeResult::Bad => {
-                    println!("Handshake timeout");
-                    return ConnectResult::Bad;
+            match udp_socket {
+                Some(ref socket) => {
+                    if let Ok(val) = command_receiver.recv_timeout(receive_timeout) {
+                        match val {
+                            UdpMessage::UdpData(data) => {
+                                if let Err(e) = socket.send(data.byte_data()) {
+                                    eprintln!("[Controller] Unable to send UDP data. Dropping packet. Error: {}", e);
+                                }
+                            }
+                        };
+                    }
+                },
+                None => {
+                    udp_socket = udp_bind(BaseProtocol::UdpPort.into());
+                    match udp_socket {
+                        Some(ref socket) => {
+                            match socket.connect(SocketAddr::new(wiiu_ip, BaseProtocol::UdpPort.into())) {
+                                Ok(_) => {
+                                    match socket.set_nonblocking(true) {
+                                        Ok(_) => println!("[Controller] Set to nonblocking"),
+                                        Err(e) => println!("[Controller] Unable to set nonblocking: {}", e)
+                                    }
+                                }
+                                Err(e) => {
+                                    println!("[Controller] Unable to connect to send controller commands, trying again in 1 second: {}", e);
+                                    thread::sleep(Duration::from_secs(1));
+                                }
+                            };
+                        },
+                        None => {
+                            println!("[Controller] Unable to connect to send controller commands, trying again in 1 second");
+                            thread::sleep(Duration::from_secs(1));
+                        }
+                    }
                 }
-                HandshakeResult::Good => {}
-            };
+            }
+        }
+    })
+}
 
-            stream
+fn start_rumble_thread(
+    rumble_sender: Sender<Rumble>,
+    wiiu_ip: IpAddr,
+    application_state: Arc<Atomic<ApplicationState>>
+) -> JoinHandle<()> {
+    thread::spawn(move || {
+        let mut udp_socket: Option<UdpSocket> = None;
+        let mut udp_buffer = [0; 1400];
+        let send_timeout = Duration::from_secs(1);
+        loop {
+            match application_state.load(Ordering::Relaxed) {
+                ApplicationState::Disconnected => {
+                    thread::sleep(Duration::from_secs(1));
+                    continue;
+                },
+                ApplicationState::Exiting => return,
+                ApplicationState::Connected => {}
+            }
+
+            match udp_socket {
+                Some(ref socket) => {
+                    match socket.recv_from(&mut udp_buffer) {
+                        Ok((count, addr)) => {
+                            if count >= 6 && addr.ip() == wiiu_ip {
+                                let mut data = ByteBuffer::from_bytes(&udp_buffer);
+
+                                if data.read_u8() == UdpProtocol::UdpCommandRumble.into() {
+                                    let handle = data.read_i32();
+                                    if data.read_u8() == UdpProtocol::UdpCommandRumble.into() {
+                                        let _ = rumble_sender.send_timeout(Rumble::Start(handle), send_timeout);
+                                    } else {
+                                        let _ = rumble_sender.send_timeout(Rumble::Stop(handle), send_timeout);
+                                    }
+                                }
+    
+                                udp_buffer.fill(0);
+                            }
+                        }
+                        Err(_e) => {
+                            // reconnect? what if it times out?
+                        }
+                    }
+                },
+                None => {
+                    udp_socket = udp_bind(BaseProtocol::UdpServerPort.into());
+                    match udp_socket {
+                        Some(ref socket) => {
+                            let _ = socket.set_read_timeout(Some(send_timeout));
+                        },
+                        None => {
+                            println!("[Rumble] Unable to open UDP server, trying again in 1 second.");
+                            thread::sleep(Duration::from_secs(1));
+                        }
+                    }
+                }
+            }
+        }
+    })
+}
+
+fn tcp_connect(wiiu_ip: IpAddr) -> TcpConnectionResult {
+    let addr: SocketAddr = SocketAddr::new(wiiu_ip, BaseProtocol::TcpPort.into());
+    match TcpStream::connect_timeout(&addr, Duration::from_secs(2)) {
+        Ok(mut stream) => {
+            match handshake(&mut stream) {
+                HandshakeResult::Bad => println!("Handshake timeout"),
+                HandshakeResult::Good => return TcpConnectionResult::Good(stream)
+            };
         }
         Err(_) => {
             println!("Couldn't connect to server...");
-            return ConnectResult::Bad;
         }
     };
 
-    let udp_stream = match udp_bind() {
-        Some(val) => val,
-        None => return ConnectResult::Bad
-    };
-
-    ConnectResult::Good(Connection { tcp: tcp_stream, udp: udp_stream })
+    TcpConnectionResult::Bad
 }
 
-fn udp_bind() -> Option<UdpSocket> {
-    let socket = match UdpSocket::bind(format!("0.0.0.0:{}", BaseProtocol::UdpServerPort as i16)) {
+fn udp_bind(port: i16) -> Option<UdpSocket> {
+    let socket = match UdpSocket::bind(format!("0.0.0.0:{}", port)) {
         Ok(val) => val,
         Err(e) => {
             println!("Unable to bind UDP: {}", e);
             return None
         }
     };
-
-    let _ = socket.set_nonblocking(true);
 
     return Some(socket);
 }
@@ -287,15 +397,14 @@ fn close(stream: &mut TcpStream) {
     };
 }
 
-#[derive(Copy, Clone)]
 enum HandshakeResult {
     Bad,
     Good
 }
 
-pub enum ConnectResult {
+enum TcpConnectionResult {
     Bad,
-    Good(Connection)
+    Good(TcpStream)
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -327,12 +436,18 @@ impl From<u8> for ProtocolVersion {
 }
 
 #[derive(Copy, Clone)]
-pub enum BaseProtocol {
+enum BaseProtocol {
     //Version = ProtocolVersion::Version3 as isize,
 
     TcpPort = 8112,
     UdpPort = 8113,
     UdpServerPort = 8114,
+}
+
+impl Into<i16> for BaseProtocol {
+    fn into(self) -> i16 {
+        self as i16
+    }
 }
 
 impl Into<u16> for BaseProtocol {
@@ -345,57 +460,4 @@ impl Into<u8> for BaseProtocol {
     fn into(self) -> u8 {
         self as u8
     }
-}
-
-pub enum TcpProtocol {
-    TcpCommandAttach = 0x01,
-    TcpCommandDetach = 0x02,
-    TcpCommandPing = 0xF0,
-    TcpCommandPong = 0xF1,
-
-    TcpCommandAttachConfigFound = 0xE0,
-    TcpCommandAttachConfigNotFound = 0xE1,
-    TcpCommandAttachUserdataOkay = 0xE8,
-    TcpCommandAttachUserdataBad = 0xE9
-}
-
-impl Into<u16> for TcpProtocol {
-    fn into(self) -> u16 {
-        self as u16
-    }
-}
-
-impl Into<u8> for TcpProtocol {
-    fn into(self) -> u8 {
-        self as u8
-    }
-}
-
-pub enum UdpProtocol {
-    UdpCommandData = 0x03,
-    UdpCommandRumble = 0x01
-}
-
-impl Into<u16> for UdpProtocol {
-    fn into(self) -> u16 {
-        self as u16
-    }
-}
-
-impl Into<u8> for UdpProtocol {
-    fn into(self) -> u8 {
-        self as u8
-    }
-}
-
-pub enum Message {
-    Terminate,
-    TcpData(Box<dyn Command>),
-    UdpData(Box<dyn Command>),
-    Attach(AttachData)
-}
-
-pub struct Connection {
-    pub tcp: TcpStream,
-    pub udp: UdpSocket
 }

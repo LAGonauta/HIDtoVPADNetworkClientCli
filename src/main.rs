@@ -1,8 +1,7 @@
-use std::{sync::{Arc, atomic::AtomicBool, atomic::Ordering}};
+use std::{sync::{Arc, atomic::Ordering}};
 
-use commands::Rumble;
-use flume::{Sender, Receiver};
-use network::{BaseProtocol, Message};
+use atomic::Atomic;
+use models::ApplicationState;
 
 use std::net::IpAddr;
 
@@ -11,42 +10,57 @@ mod network;
 mod commands;
 mod controller_manager;
 mod handle_factory;
+mod models;
 
 fn main() {
-    let (command_sender, command_receiver): (Sender<Message>, Receiver<Message>) = flume::bounded(2);
-    let (reconection_notifier_sender, reconection_notifier_receiver): (Sender<()>, Receiver<()>) = flume::unbounded();
-    let (rumble_sender, rumble_receiver): (Sender<Rumble>, Receiver<Rumble>) = flume::unbounded();
-    let should_shutdown = Arc::new(AtomicBool::new(false));
     let addr: IpAddr = "192.168.15.15".parse().unwrap();
     let polling_rate: u32 = 250; // Hz
 
-    let network_thread = network::start_thread(addr, command_receiver, reconection_notifier_sender, rumble_sender, should_shutdown.clone());
+    let (tcp_command_sender, tcp_command_receiver) = flume::unbounded();
+    let (udp_command_sender, udp_command_receiver) = flume::bounded(0);
 
-    // 1. build controllers with gamepadId and handle
+    let (reconection_notifier_sender, reconection_notifier_receiver) = flume::unbounded(); // use BUS
 
-    // 2. connect
+    let (rumble_sender, rumble_receiver) = flume::bounded(0);
 
-    // 3. send data
+    let application_state = Arc::new(Atomic::new(ApplicationState::Disconnected));
+
+    let network_thread = network::start_thread(
+        addr,
+        tcp_command_sender.clone(),
+        tcp_command_receiver,
+        udp_command_receiver.clone(),
+        reconection_notifier_sender,
+        rumble_sender,
+        application_state.clone());
 
     let go_thread = std::thread::spawn({
-        let should_shutdown = should_shutdown.clone();
+        let application_state = application_state.clone();
         move || {
-            go::go(polling_rate, command_sender, reconection_notifier_receiver, rumble_receiver, should_shutdown);
+            go::go(polling_rate,
+                tcp_command_sender,
+                udp_command_sender,
+                reconection_notifier_receiver,
+                rumble_receiver,
+                application_state
+            );
         }
     });
 
     ctrlc::set_handler({
-        let should_shutdown = should_shutdown.clone();
+        let application_state = application_state.clone();
         move || {
-            should_shutdown.store(true, Ordering::Relaxed);
+            application_state.store(ApplicationState::Exiting, Ordering::Relaxed);
+            println!("### Press enter to finish ###");
         }
     })
     .expect("Error setting Ctrl-C handler");
 
-    println!("Press enter to exit...");
+    println!("### Press enter to exit ###");
     let _ = std::io::stdin().read_line(&mut String::new());
+    println!("---> Exiting <---");
 
-    should_shutdown.store(true, Ordering::Relaxed);
+    application_state.store(ApplicationState::Exiting, Ordering::Relaxed);
     let _ = network_thread.join();
     let _ = go_thread.join();
 }
