@@ -5,7 +5,7 @@ use byteorder::{NetworkEndian, ReadBytesExt, WriteBytesExt};
 use flume::{Receiver, Sender};
 use atomic::{Atomic, Ordering};
 
-use crate::{commands::{AttachCommand, Command, PingCommand}, models::{ApplicationState, AttachResponse, PingResponse, Rumble, TcpMessage, TcpProtocol, UdpMessage, UdpProtocol}};
+use crate::{commands::{AttachCommand, Command, DetachCommand, PingCommand}, models::{ApplicationState, AttachResponse, PingResponse, Rumble, TcpMessage, TcpProtocol, UdpMessage, UdpProtocol}};
 
 pub fn start_thread(
     wiiu_ip: IpAddr,
@@ -114,7 +114,11 @@ fn start_control_thread(
                                     let _r =
                                         attach_data.response.send(attached);
                                 }
-                                TcpMessage::Dettach(_) => {}
+                                TcpMessage::Detach(detach_data) => {
+                                    if !detach_controller(detach_data.handle, tcp_stream) {
+                                        stream = TcpConnectionResult::Bad; // not quite, needs to make it better
+                                    }
+                                }
                             }
         
                         }
@@ -294,6 +298,12 @@ fn udp_bind(port: i16) -> Option<UdpSocket> {
 fn attach_controller(controller_handle: i32, stream: &mut TcpStream) -> Option<AttachResponse> {
     let command = AttachCommand::new(controller_handle, 0x7331, 0x1337, 1);
     send_attach(&command, stream)
+}
+
+fn detach_controller(controller_handle: i32, stream: &mut TcpStream) -> bool {
+    let command = DetachCommand::new(controller_handle, 1);
+
+    stream.write_all(command.byte_data()).is_ok()
 }
 
 fn handshake(stream: &mut TcpStream) -> HandshakeResult {

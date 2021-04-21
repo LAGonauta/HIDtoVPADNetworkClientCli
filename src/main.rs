@@ -9,7 +9,6 @@ mod go;
 mod network;
 mod commands;
 mod controller_manager;
-mod handle_factory;
 mod models;
 
 fn main() {

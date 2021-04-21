@@ -54,7 +54,7 @@ impl Into<u8> for UdpProtocol {
 
 pub enum TcpMessage {
     Attach(AttachData),
-    Dettach(DettachData),
+    Detach(DetachData),
     Ping(Sender<PingResponse>)
 }
 
@@ -72,7 +72,7 @@ pub struct AttachData {
     pub response: Sender<Option<AttachResponse>>
 }
 
-pub struct DettachData {
+pub struct DetachData {
     pub handle: i32
 }
 

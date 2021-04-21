@@ -1,10 +1,91 @@
 use std::{sync::Arc, thread, time::Duration};
 use std::num::NonZeroU32;
 use flume::{Receiver, Sender};
-use gilrs::{GamepadId, Gilrs, ff::{BaseEffect, BaseEffectType, EffectBuilder}};
-use crate::{commands::WriteCommand, controller_manager::ControllerManager, handle_factory::HandleFactory, models::{ApplicationState, AttachData, Controller, Rumble, TcpMessage, UdpMessage}};
+use gilrs::{GamepadId, Gilrs, ff::{BaseEffect, BaseEffectType, Effect, EffectBuilder}};
+use crate::{commands::WriteCommand, controller_manager::ControllerManager, models::{ApplicationState, AttachData, DetachData, Controller, Rumble, TcpMessage, UdpMessage}};
 use governor::{Quota, RateLimiter, clock::{self, Clock}};
 use atomic::{Atomic, Ordering};
+
+fn gamepad_id_to_handle(gamepad_id: GamepadId) -> i32 {
+    let raw_id: usize = gamepad_id.into();
+    let max = (i32::MAX - 1) as usize;
+    ((raw_id % max) as i32) + 1
+}
+
+fn attach(gamepad_id: GamepadId, tcp_sender: &Sender<TcpMessage>) -> Option<Controller> {
+    let handle = gamepad_id_to_handle(gamepad_id);
+    let (s, r) = flume::bounded(0);
+    match tcp_sender.send(TcpMessage::Attach(AttachData { handle, response: s })) {
+        Ok(_) => {
+            match r.recv_timeout(Duration::from_secs(2)) {
+                Ok(val) => {
+                    match val {
+                        Some(val) => {
+                            if val.device_slot < 0 || val.pad_slot < 0 {
+                                println!("Unable to attach controller, invalid slots.")
+                            } else {
+                                return Some(Controller { id: gamepad_id, handle: handle, device_slot: val.device_slot, pad_slot: val.pad_slot, effect: None });
+                            }
+                        },
+                        None => println!("Unable to attach controller, no response received.")
+                    }
+                }
+                Err(e) => println!("Unable to attach controller, error on receive: {}", e)
+            };
+        },
+        Err(e) => println!("Unable to attach controller, error on send: {}", e)
+    };
+
+    None
+}
+
+fn dettach_gamepad(gamepad_id: GamepadId, tcp_sender: &Sender<TcpMessage>) {
+    let handle = gamepad_id_to_handle(gamepad_id);
+    match tcp_sender.send(TcpMessage::Detach(DetachData { handle })) {
+        Ok(_) => {},
+        Err(e) => println!("Unable to dettach controller: {}", e)
+    };
+}
+
+fn create_effect(id: GamepadId, gilrs: &mut Gilrs) -> Option<Effect> {
+    if !gilrs.gamepad(id).is_ff_supported() {
+        return None;
+    }
+
+    match EffectBuilder::new()
+        // .add_effect(BaseEffect {
+        //     kind: BaseEffectType::Strong { magnitude: 10_000 },
+        //     ..Default::default()
+        // })
+        .add_effect(BaseEffect {
+            kind: BaseEffectType::Weak { magnitude: 20_000 },
+            ..Default::default()
+        })
+        .add_gamepad(&gilrs.gamepad(id))
+        .finish(gilrs) {
+        Ok(effect) => {
+            Some(effect)
+        },
+        Err(e) => {
+            println!("Unable to add rumble to {}. Error: {}", gilrs.gamepad(id).name(), e);
+            None
+        }
+    }
+}
+
+fn attach_gamepad(gamepad_id: GamepadId, tcp_sender: &Sender<TcpMessage>, gilrs: &mut Gilrs) -> Option<Controller> {
+    let gamepad = gilrs.gamepad(gamepad_id);
+    match attach(gamepad_id, &tcp_sender) {
+        Some(controller) => {
+            println!("{} is {:?}. Attached!", gamepad.name(), gamepad.power_info());
+            Some(controller)
+        },
+        None => {
+            println!("{} is {:?}. Unable to attach...", gamepad.name(), gamepad.power_info());
+            None
+        }
+    }
+}
 
 pub fn go(
     polling_rate: u32,
@@ -17,64 +98,13 @@ pub fn go(
     let mut gilrs = Gilrs::new().unwrap();
 
     // Iterate over all connected gamepads and attach them
-    let mut handle_factory = HandleFactory::new();
     let mut controllers = Vec::new();
-    let (s, r) = flume::bounded(0);
-    let attach = |handle: i32, gamepad_id: GamepadId| -> Option<Controller> {
-        match tcp_sender.send(TcpMessage::Attach(AttachData { handle, response: s.clone() })) {
-            Ok(_) => {
-                match r.recv() {
-                    Ok(val) => {
-                        match val {
-                            Some(val) => {
-                                if val.device_slot < 0 || val.pad_slot < 0 {
-                                    println!("Unable to attach controller, invalid slots.")
-                                } else {
-                                    return Some(Controller { id: gamepad_id, handle: handle, device_slot: val.device_slot, pad_slot: val.pad_slot, effect: None });
-                                }
-                            },
-                            None => println!("Unable to attach controller, no response received.")
-                        }
-                    }
-                    Err(e) => println!("Unable to attach controller, error on receive: {}", e)
-                };
-            },
-            Err(e) => println!("Unable to attach controller, error on send: {}", e)
-        };
-        return None;
-    };
 
-    for (id, gamepad) in gilrs.gamepads() {
-        let handle = handle_factory.next();
-        match attach(handle, id) {
-            Some(controller) => {
-                println!("{} is {:?}. Attached!", gamepad.name(), gamepad.power_info());
-                controllers.push(controller);
-            },
-            None => println!("{} is {:?}. Unable to attach...", gamepad.name(), gamepad.power_info())
+    for gamepad_id in gilrs.gamepads().map(|(gamepad_id, _)| gamepad_id).collect::<Vec<GamepadId>>() {
+        if let Some(mut controller) = attach_gamepad(gamepad_id, &tcp_sender, &mut gilrs) {
+            controller.effect = create_effect(gamepad_id, &mut gilrs);
+            controllers.push(controller);
         }
-    }
-
-    for controller in &mut controllers {
-        if gilrs.gamepad(controller.id).is_ff_supported() {
-            match EffectBuilder::new()
-            // .add_effect(BaseEffect {
-            //     kind: BaseEffectType::Strong { magnitude: 10_000 },
-            //     ..Default::default()
-            // })
-            .add_effect(BaseEffect {
-                kind: BaseEffectType::Weak { magnitude: 20_000 },
-                ..Default::default()
-            })
-            .add_gamepad(&gilrs.gamepad(controller.id))
-            .finish(&mut gilrs) {
-                Ok(effect) => {
-                    controller.effect = Some(effect);
-                },
-                Err(e) => println!("Unable to add rumble to {}. Error: {}", gilrs.gamepad(controller.id).name(), e)
-            };
-        }
-
     }
 
     let controller_manager = ControllerManager::new();
@@ -137,7 +167,7 @@ pub fn go(
 
         if reconection_notifier.try_recv().is_ok() {
             for controller in &mut controllers {
-                match attach(controller.handle, controller.id) {
+                match attach(controller.id, &tcp_sender) {
                     Some(new_data) => {
                         controller.pad_slot = new_data.pad_slot;
                         controller.device_slot = new_data.device_slot;
@@ -148,11 +178,30 @@ pub fn go(
             }
         }
 
+        while let Some(event) = gilrs.next_event() {
+            match event.event {
+                gilrs::EventType::Connected => {
+                    if !controllers.iter().any(|controller| controller.id == event.id) {
+                        println!("Attaching {}", gilrs.gamepad(event.id).name());
+                        if let Some(mut controller) = attach_gamepad(event.id, &tcp_sender, &mut gilrs) {
+                            controller.effect = create_effect(event.id, &mut gilrs);
+                            controllers.push(controller);
+                        }
+                    }
+                },
+                gilrs::EventType::Disconnected => {
+                    if controllers.iter().any(|controller| controller.id == event.id) {
+                        println!("Dettaching {}", gilrs.gamepad(event.id).name());
+                        dettach_gamepad(event.id, &tcp_sender);
+                        controllers.retain(|c| c.id != event.id);
+                    }
+                },
+                _ => {}
+            }
+        }
+        
         let mut commands = Vec::new();
         for controller in &controllers {
-            // check if any controller changed and send attach/detach events.
-            ControllerManager::prepare(&mut gilrs);
-
             let gamepad = gilrs.gamepad(controller.id);
             commands.push((controller, controller_manager.poll(&gamepad)));
         }
