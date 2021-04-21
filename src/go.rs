@@ -17,7 +17,7 @@ fn attach(gamepad_id: GamepadId, tcp_sender: &Sender<TcpMessage>) -> Option<Cont
     let (s, r) = flume::bounded(0);
     match tcp_sender.send(TcpMessage::Attach(AttachData { handle, response: s })) {
         Ok(_) => {
-            match r.recv_timeout(Duration::from_secs(2)) {
+            match r.recv_timeout(Duration::from_secs(10)) {
                 Ok(val) => {
                     match val {
                         Some(val) => {
@@ -95,6 +95,15 @@ pub fn go(
     rumble_receiver: Receiver<Rumble>,
     application_state: Arc<Atomic<ApplicationState>>
 ) {
+
+    while application_state.load(Ordering::Relaxed).is_disconnected() {
+        thread::sleep(Duration::from_secs(1));
+    }
+
+    if application_state.load(Ordering::Relaxed).is_exiting() {
+        return;
+    }
+
     let mut gilrs = Gilrs::new().unwrap();
 
     // Iterate over all connected gamepads and attach them
