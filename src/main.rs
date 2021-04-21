@@ -1,5 +1,5 @@
 use std::{sync::{Arc, atomic::Ordering}};
-use clap::{Arg, App, SubCommand};
+use clap::{Arg, App};
 
 use atomic::Atomic;
 use models::ApplicationState;
@@ -53,6 +53,8 @@ fn main() {
                 .required(true))
             .get_matches();
 
+    set_timer();
+
     let addr: IpAddr = matches.value_of("ip").unwrap().parse::<IpAddr>().unwrap();
     let polling_rate: u32 = matches.value_of("polling-rate").unwrap().parse::<u32>().unwrap();
 
@@ -104,3 +106,13 @@ fn main() {
     let _ = network_thread.join();
     let _ = go_thread.join();
 }
+
+#[cfg(windows)]
+fn set_timer() {
+    unsafe {
+        winapi::um::timeapi::timeBeginPeriod(1);
+    }
+}
+
+#[cfg(not(windows))]
+fn set_timer() { }
