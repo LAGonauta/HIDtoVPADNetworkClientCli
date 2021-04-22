@@ -1,5 +1,5 @@
 use std::{sync::{Arc, atomic::Ordering}};
-use clap::{Arg, App, SubCommand};
+use clap::{Arg, App};
 
 use atomic::Atomic;
 use models::ApplicationState;
@@ -53,6 +53,8 @@ fn main() {
                 .required(true))
             .get_matches();
 
+    let _timer = Timer::new(1);
+
     let addr: IpAddr = matches.value_of("ip").unwrap().parse::<IpAddr>().unwrap();
     let polling_rate: u32 = matches.value_of("polling-rate").unwrap().parse::<u32>().unwrap();
 
@@ -103,4 +105,45 @@ fn main() {
     application_state.store(ApplicationState::Exiting, Ordering::Relaxed);
     let _ = network_thread.join();
     let _ = go_thread.join();
+}
+
+struct Timer {
+    value: u32
+}
+
+impl Timer {
+    pub fn new(value: u32) -> Self {
+        let result = Timer {
+            value
+        };
+
+        result.set_timer();
+        result
+    }
+
+    #[cfg(windows)]
+    fn set_timer(&self) {
+        unsafe {
+            winapi::um::timeapi::timeBeginPeriod(self.value);
+        }
+    }
+
+    #[cfg(windows)]
+    fn unset_timer(&self) {
+        unsafe {
+            winapi::um::timeapi::timeEndPeriod(self.value);
+        }
+    }
+
+    #[cfg(not(windows))]
+    fn set_timer(&self) { }
+
+    #[cfg(not(windows))]
+    fn unset_timer(&self) { }
+}
+
+impl Drop for Timer {
+    fn drop(&mut self) {
+        self.unset_timer();
+    }
 }
