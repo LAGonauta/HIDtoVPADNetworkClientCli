@@ -119,33 +119,12 @@ pub fn go(
     let controller_manager = ControllerManager::new();
     let clock = clock::DefaultClock::default();
     let limiter = RateLimiter::direct_with_clock(
-        // for some reason the synchronous solution requires to divide the polling rate. Might be interesting to use async-await.
-        Quota::per_second(NonZeroU32::new(polling_rate / 2).unwrap()).allow_burst(NonZeroU32::new(1u32).unwrap()),
+        Quota::per_second(NonZeroU32::new(polling_rate).unwrap()).allow_burst(NonZeroU32::new(1u32).unwrap()),
         &clock
     );
 
-    // let mut i = 0;
-    // let mut last = Instant::now();
-    // let interval = Duration::from_secs(1);
     let send_timeout = Duration::from_secs(1);
     loop {
-        // {
-        //     i = i + 1;
-        //     let now = Instant::now();
-        //     if now > last + interval {
-        //         println!("Count: {}", i);
-        //         i = 0;
-        //         last = now;
-        //     }
-        // }
-
-        match limiter.check() {
-            Ok(_) => {},
-            Err(e) => {
-                thread::sleep(e.wait_time_from(clock.now()));
-            }
-        }
-
         match application_state.load(Ordering::Relaxed) {
             ApplicationState::Disconnected => {
                 thread::sleep(Duration::from_secs(1));
@@ -153,6 +132,11 @@ pub fn go(
             },
             ApplicationState::Exiting => return,
             ApplicationState::Connected => {}
+        }
+
+        if let Err(e) = limiter.check() {
+            thread::sleep(e.wait_time_from(clock.now()));
+            continue;
         }
 
         if let Ok(rumble) = rumble_receiver.try_recv() {
