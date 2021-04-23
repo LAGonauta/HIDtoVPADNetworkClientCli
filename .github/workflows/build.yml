@@ -1,0 +1,108 @@
+on: [push, pull_request]
+
+name: Compile for everything
+
+jobs:
+  build_win:
+    name: Build for Windows amd64
+    runs-on: windows-latest
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v2
+
+      - name: Install stable toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+
+      - uses: actions-rs/cargo@v1
+        with:
+          command: build
+          args: --release
+
+      - uses: actions/upload-artifact@master
+        with:
+          name: network-client-windows-x64
+          path: ${{ github.workspace }}/target/release/network-client.exe
+
+  build_armhf:
+    name: Build for armhf
+    runs-on: ubuntu-20.04
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v2
+
+      - run: sudo docker build -t local/armhf-image:latest -f ${{ github.workspace }}/.github/scripts/Dockerfile_armhf .
+
+      - name: Install stable toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          target: arm-unknown-linux-gnueabihf
+          override: true
+
+      - uses: actions-rs/cargo@v1
+        with:
+          use-cross: true
+          command: build
+          args: --release --target=arm-unknown-linux-gnueabihf
+
+      - uses: actions/upload-artifact@master
+        with:
+          name: network-client-linux-armhf
+          path: ${{ github.workspace }}/target/arm-unknown-linux-gnueabihf/release/network-client
+
+  build_aarch64:
+    name: Build for aarch64
+    runs-on: ubuntu-20.04
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v2
+
+      - run: sudo docker build -t local/aarch64-image:latest -f ${{ github.workspace }}/.github/scripts/Dockerfile_aarch64 .
+
+      - name: Install stable toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          target: aarch64-unknown-linux-gnu
+          override: true
+
+      - uses: actions-rs/cargo@v1
+        with:
+          use-cross: true
+          command: build
+          args: --release --target=aarch64-unknown-linux-gnu
+
+      - uses: actions/upload-artifact@master
+        with:
+          name: network-client-linux-aarch64
+          path: ${{ github.workspace }}/target/aarch64-unknown-linux-gnu/release/network-client
+
+  build:
+    name: Build for Linux amd64
+    runs-on: ubuntu-20.04
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v2
+
+      - run: sudo apt-get update
+      - run: sudo apt-get install -y libudev-dev
+
+      - name: Install stable toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          target: x86_64-unknown-linux-gnu
+          override: true
+
+      - uses: actions-rs/cargo@v1
+        with:
+          command: build
+          args: --release --target=x86_64-unknown-linux-gnu
+
+      - uses: actions/upload-artifact@master
+        with:
+          name: network-client-linux-x64
+          path: ${{ github.workspace }}/target/x86_64-unknown-linux-gnu/release/network-client
