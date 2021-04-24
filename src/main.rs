@@ -14,10 +14,8 @@ mod models;
 
 fn main() {
     let matches =
-        App::new("HIDtoVPAD Client in Rust")
-            .version("1.0")
-            .author("LAGonauta <lagonauta@gmail.com>")
-            .about("HIDtoVPAD client, but light")
+        App::new("Command line HIDtoVPAD network client")
+            .version("v1.0.0")
             .arg(Arg::with_name("polling-rate")
                 .short("p")
                 .long("polling-rate")

@@ -53,12 +53,8 @@ fn create_effect(id: GamepadId, gilrs: &mut Gilrs) -> Option<Effect> {
     }
 
     match EffectBuilder::new()
-        // .add_effect(BaseEffect {
-        //     kind: BaseEffectType::Strong { magnitude: 10_000 },
-        //     ..Default::default()
-        // })
         .add_effect(BaseEffect {
-            kind: BaseEffectType::Weak { magnitude: 20_000 },
+            kind: BaseEffectType::Weak { magnitude: 25_000 },
             ..Default::default()
         })
         .add_gamepad(&gilrs.gamepad(id))
@@ -164,9 +160,8 @@ pub fn go(
                     Some(new_data) => {
                         controller.pad_slot = new_data.pad_slot;
                         controller.device_slot = new_data.device_slot;
-                        //println!("{} is {:?}. Attached!", gamepad.name(), gamepad.power_info());
                     },
-                    None => {}//println!("{} is {:?}. Unable to attach...", gamepad.name(), gamepad.power_info())
+                    None => {}
                 }
             }
         }
@@ -202,7 +197,7 @@ pub fn go(
         if commands.len() > 0 {
             let write_command =
                 WriteCommand::new(&commands, 1);
-            match udp_sender.send_timeout(UdpMessage::UdpData(Box::new(write_command)), send_timeout) { // add timeout?
+            match udp_sender.send_timeout(UdpMessage::UdpData(Box::new(write_command)), send_timeout) {
                 Err(e) => println!("Unable to send data to thread: {}", e),
                 Ok(_) => {}
             }

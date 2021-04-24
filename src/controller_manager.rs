@@ -33,8 +33,6 @@ impl ControllerManager {
         data.write_i32(stick_state);
         data.write_i32(buttons_state);
 
-        //print!("Final state: = {:b} \r", BinaryPrint(data.to_bytes()));
-
         data.to_bytes()
     }
 
@@ -67,8 +65,6 @@ impl ControllerManager {
             .fold(trigger_state, |accumulated, element| accumulated | element);
 
         buttons_state = buttons_state | self.overflow(trigger_state as i32);
-
-        //print!("Stick: {:#034b}. Triggers: {:#018b}. Buttons state: {:#010}.     \r", stick_state, trigger_state, buttons_state);
 
         (buttons_state, stick_state)
     }
