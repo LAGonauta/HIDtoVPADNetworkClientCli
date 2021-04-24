@@ -40,14 +40,33 @@ jobs:
           name: network-client-windows ${{ matrix.target }}
           path: ${{ github.workspace }}/target/${{ matrix.target }}/release/network-client-${{ matrix.target }}.exe
 
-  build_linux_armhf:
-    name: Build for Linux armhf
+  build_linux:
+    name: Build for Linux
     runs-on: ubuntu-20.04
+    strategy:
+      matrix:
+        target:
+          - arm-unknown-linux-gnueabihf
+          - aarch64-unknown-linux-gnu
+          - x86_64-unknown-linux-gnu
     steps:
       - name: Checkout sources
         uses: actions/checkout@v2
 
+      - run: sudo apt-get update
+
+      # install dependencies
+
       - run: sudo docker build -t local/armhf-image:latest -f ${{ github.workspace }}/.github/scripts/Dockerfile_armhf .
+        if: ${{ matrix.target == 'arm-unknown-linux-gnueabihf' }}
+
+      - run: sudo docker build -t local/aarch64-image:latest -f ${{ github.workspace }}/.github/scripts/Dockerfile_aarch64 .
+        if: ${{ matrix.target == 'aarch64-unknown-linux-gnu' }}
+
+      - run: sudo apt-get install -y libudev-dev
+        if: ${{ matrix.target == 'x86_64-unknown-linux-gnu' }}
+
+      # install dependencies
 
       - name: Install stable toolchain
         uses: actions-rs/toolchain@v1
@@ -58,78 +77,32 @@ jobs:
 
       - uses: actions-rs/cargo@v1
         with:
-          use-cross: true
+          use-cross: ${{ matrix.target != 'x86_64-unknown-linux-gnu' }}
           command: build
-          args: --release --target=arm-unknown-linux-gnueabihf
+          args: --release --target=${{ matrix.target }}
 
-      - run: sudo apt-get update
+      # strip binaries
+
       - run: sudo apt-get install --assume-yes binutils-arm-linux-gnueabihf
-      - run: /usr/bin/arm-linux-gnueabihf-strip -s ${{ github.workspace }}/target/arm-unknown-linux-gnueabihf/release/network-client
-      - run: mv ${{ github.workspace }}/target/arm-unknown-linux-gnueabihf/release/network-client ${{ github.workspace }}/target/arm-unknown-linux-gnueabihf/release/network-client-linux-armhf
+        if: ${{ matrix.target == 'arm-unknown-linux-gnueabihf' }}
 
-      - uses: actions/upload-artifact@master
-        with:
-          name: network-client-linux-armhf
-          path: ${{ github.workspace }}/target/arm-unknown-linux-gnueabihf/release/network-client-linux-armhf
+      - run: /usr/bin/arm-linux-gnueabihf-strip -s ${{ github.workspace }}/target/${{ matrix.target }}/release/network-client
+        if: ${{ matrix.target == 'arm-unknown-linux-gnueabihf' }}
 
-  build_linux_aarch64:
-    name: Build for Linux aarch64
-    runs-on: ubuntu-20.04
-    steps:
-      - name: Checkout sources
-        uses: actions/checkout@v2
-
-      - run: sudo docker build -t local/aarch64-image:latest -f ${{ github.workspace }}/.github/scripts/Dockerfile_aarch64 .
-
-      - name: Install stable toolchain
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          target: aarch64-unknown-linux-gnu
-          override: true
-
-      - uses: actions-rs/cargo@v1
-        with:
-          use-cross: true
-          command: build
-          args: --release --target=aarch64-unknown-linux-gnu
-
-      - run: sudo apt-get update
       - run: sudo apt-get install --assume-yes binutils-aarch64-linux-gnu
-      - run: /usr/bin/aarch64-linux-gnu-strip  -s ${{ github.workspace }}/target/aarch64-unknown-linux-gnu/release/network-client
-      - run: mv ${{ github.workspace }}/target/aarch64-unknown-linux-gnu/release/network-client ${{ github.workspace }}/target/aarch64-unknown-linux-gnu/release/network-client-linux-aarch64
+        if: ${{ matrix.target == 'aarch64-unknown-linux-gnu' }}
+
+      - run: /usr/bin/aarch64-linux-gnu-strip -s ${{ github.workspace }}/target/${{ matrix.target }}/release/network-client
+        if: ${{ matrix.target == 'aarch64-unknown-linux-gnu' }}
+
+      - run: strip -s ${{ github.workspace }}/target/${{ matrix.target }}/release/network-client
+        if: ${{ matrix.target == 'x86_64-unknown-linux-gnu' }}
+
+      # strip binaries
+
+      - run: mv ${{ github.workspace }}/target/${{ matrix.target }}/release/network-client ${{ github.workspace }}/target/${{ matrix.target }}/release/network-client-${{ matrix.target }}
 
       - uses: actions/upload-artifact@master
         with:
-          name: network-client-linux-aarch64
-          path: ${{ github.workspace }}/target/aarch64-unknown-linux-gnu/release/network-client-linux-aarch64
-
-  build_linux_amd64:
-    name: Build for Linux amd64
-    runs-on: ubuntu-20.04
-    steps:
-      - name: Checkout sources
-        uses: actions/checkout@v2
-
-      - run: sudo apt-get update
-      - run: sudo apt-get install -y libudev-dev
-
-      - name: Install stable toolchain
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          target: x86_64-unknown-linux-gnu
-          override: true
-
-      - uses: actions-rs/cargo@v1
-        with:
-          command: build
-          args: --release --target=x86_64-unknown-linux-gnu
-
-      - run: strip -s ${{ github.workspace }}/target/x86_64-unknown-linux-gnu/release/network-client
-      - run: mv ${{ github.workspace }}/target/x86_64-unknown-linux-gnu/release/network-client ${{ github.workspace }}/target/x86_64-unknown-linux-gnu/release/network-client-linux-amd64
-
-      - uses: actions/upload-artifact@master
-        with:
-          name: network-client-linux-x64
-          path: ${{ github.workspace }}/target/x86_64-unknown-linux-gnu/release/network-client-linux-amd64
+          name: network-client-${{ matrix.target }}
+          path: ${{ github.workspace }}/target/${{ matrix.target }}/release/network-client-${{ matrix.target }}
