@@ -3,9 +3,14 @@ on: [push, pull_request]
 name: Compile for everything
 
 jobs:
-  build_win_i686:
-    name: Build for Windows i686
+  build_win:
+    name: Build for Windows
     runs-on: ubuntu-20.04
+    strategy:
+      matrix:
+        target:
+          - i686-pc-windows-gnu
+          - x86_64-pc-windows-gnu
     steps:
       - name: Checkout sources
         uses: actions/checkout@v2
@@ -14,44 +19,21 @@ jobs:
         uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
-          target: i686-pc-windows-gnu
+          target: ${{ matrix.target }}
           override: true
 
       - uses: actions-rs/cargo@v1
         with:
           use-cross: true
           command: build
-          args: --release --target=i686-pc-windows-gnu
+          args: --release --target=${{ matrix.target }}
+
+      - run: strip -s ${{ github.workspace }}/target/${{ matrix.target }}/release/network-client.exe
 
       - uses: actions/upload-artifact@master
         with:
-          name: network-client-windows-x86
-          path: ${{ github.workspace }}/target/i686-pc-windows-gnu/release/network-client.exe
-
-  build_win_amd64:
-    name: Build for Windows amd64
-    runs-on: ubuntu-20.04
-    steps:
-      - name: Checkout sources
-        uses: actions/checkout@v2
-
-      - name: Install stable toolchain
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          target: x86_64-pc-windows-gnu
-          override: true
-
-      - uses: actions-rs/cargo@v1
-        with:
-          use-cross: true
-          command: build
-          args: --release --target=x86_64-pc-windows-gnu
-
-      - uses: actions/upload-artifact@master
-        with:
-          name: network-client-windows-x64
-          path: ${{ github.workspace }}/target/x86_64-pc-windows-gnu/release/network-client.exe
+          name: network-client-windows ${{ matrix.target }}
+          path: ${{ github.workspace }}/target/${{ matrix.target }}/release/network-client.exe
 
   build_linux_armhf:
     name: Build for Linux armhf
@@ -74,6 +56,8 @@ jobs:
           use-cross: true
           command: build
           args: --release --target=arm-unknown-linux-gnueabihf
+
+      - run: strip -s ${{ github.workspace }}/target/arm-unknown-linux-gnueabihf/release/network-client
 
       - uses: actions/upload-artifact@master
         with:
@@ -102,6 +86,8 @@ jobs:
           command: build
           args: --release --target=aarch64-unknown-linux-gnu
 
+      - run: strip -s ${{ github.workspace }}/target/aarch64-unknown-linux-gnu/release/network-client
+
       - uses: actions/upload-artifact@master
         with:
           name: network-client-linux-aarch64
@@ -128,6 +114,8 @@ jobs:
         with:
           command: build
           args: --release --target=x86_64-unknown-linux-gnu
+
+      - run: strip -s ${{ github.workspace }}/target/x86_64-unknown-linux-gnu/release/network-client
 
       - uses: actions/upload-artifact@master
         with:
